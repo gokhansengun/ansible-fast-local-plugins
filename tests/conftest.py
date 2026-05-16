@@ -10,14 +10,21 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 PLUGIN_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), '..', 'ansible', 'action-plugins')
+    os.path.join(os.path.dirname(__file__), '..', 'ansible', 'plugins', 'action_plugins')
 )
 # Ensure sibling utilities (_action_utils) are importable by the plugins themselves.
 if PLUGIN_DIR not in sys.path:
     sys.path.insert(0, PLUGIN_DIR)
 
+COLLECTION_PLUGIN_DIRS = {
+    'kubernetes.core': os.path.abspath(
+        os.path.join(os.path.dirname(__file__), '..', 'ansible', 'collections',
+                     'ansible_collections', 'kubernetes', 'core', 'plugins', 'action')
+    ),
+}
 
-def _load_plugin(plugin_name: str):
+
+def _load_plugin(plugin_name: str, plugin_dir: str = None):
     """Load an action plugin by file path.
 
     importlib.import_module('copy') would return the cached stdlib copy module
@@ -25,10 +32,11 @@ def _load_plugin(plugin_name: str):
     path with a private cache key sidesteps that collision entirely and works
     the same way for stat, tempfile, and any other stdlib-shadowing name.
     """
+    dir_ = plugin_dir or PLUGIN_DIR
     cache_key = f'_aflp_{plugin_name}'
     if cache_key in sys.modules:
         return sys.modules[cache_key]
-    plugin_path = os.path.join(PLUGIN_DIR, plugin_name + '.py')
+    plugin_path = os.path.join(dir_, plugin_name + '.py')
     spec = importlib.util.spec_from_file_location(cache_key, plugin_path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[cache_key] = mod  # register before exec to handle any intra-plugin imports
@@ -69,13 +77,13 @@ def _task(args, async_val=0, environment=None, check_mode=False, no_log=False):
 
 
 def make_action(plugin_name, args, *, local=True, become=False, check_mode=False,
-                async_val=0, environment=None, extra_task_attrs=None):
+                async_val=0, environment=None, extra_task_attrs=None, plugin_dir=None):
     """Instantiate an ActionModule for plugin_name with mocked Ansible internals."""
     from ansible.parsing.dataloader import DataLoader
     from ansible.template import Templar
     from ansible.plugins import loader as plugins_loader
 
-    mod = _load_plugin(plugin_name)
+    mod = _load_plugin(plugin_name, plugin_dir=plugin_dir)
 
     conn = _local_conn() if local else _ssh_conn()
     play_ctx = _play_ctx(become=become, check_mode=check_mode)
@@ -113,6 +121,39 @@ def mock_builtin_run(plugin_name, return_value):
     mock_instance.run.return_value = return_value
     mock_mod.ActionModule.return_value = mock_instance
     with patch.object(plugin_mod, '_load_builtin_action', return_value=mock_mod):
+        yield mock_instance.run
+
+
+@contextlib.contextmanager
+def mock_collection_run(fqcn: str, return_value):
+    """Patch a collection action plugin's Python module in sys.modules for fallback tests.
+
+    The fallback path in collection plugins does a lazy
+    ``from ansible_collections.<fqcn> import ActionModule`` inside run().
+    This context manager inserts a mock for the full module path (and any
+    missing intermediate packages) so the import resolves without needing
+    the real collection installed.
+
+    fqcn: dotted name relative to ansible_collections, e.g.
+          'kubernetes.core.plugins.action.helm_repository'
+    """
+    from unittest.mock import MagicMock, patch
+
+    mock_mod = MagicMock()
+    mock_instance = MagicMock()
+    mock_instance.run.return_value = return_value
+    mock_mod.ActionModule.return_value = mock_instance
+
+    full_module = 'ansible_collections.' + fqcn
+    parts = full_module.split('.')
+    patch_dict = {}
+    for i in range(2, len(parts) + 1):  # skip 'ansible_collections' itself
+        key = '.'.join(parts[:i])
+        if key not in sys.modules:
+            patch_dict[key] = MagicMock()
+    patch_dict[full_module] = mock_mod
+
+    with patch.dict(sys.modules, patch_dict):
         yield mock_instance.run
 
 

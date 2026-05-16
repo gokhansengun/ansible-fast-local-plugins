@@ -77,6 +77,11 @@ def test_find_next_helm_release_number():
 
 
 @pytest.mark.integration
+def test_helm_repository():
+    _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_helm_repository.yml')))
+
+
+@pytest.mark.integration
 def test_fallback_ssh():
     _assert_playbook(_run(
         os.path.join(PLAYBOOK_DIR, 'test_fallback_ssh.yml'),

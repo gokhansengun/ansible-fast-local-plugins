@@ -4,7 +4,7 @@
 
 Performance-optimised Ansible **action plugins** for a local-connection-only controller. Every plugin checks whether the connection is local (`_is_local()`); if so it executes in-process (no SSH, no subprocess spawning a new Python interpreter). If not, it falls back transparently to the equivalent standard Ansible module or action plugin.
 
-Plugins live in `ansible/action-plugins/`. They are not an Ansible collection — they are standalone `.py` files loaded via `action_plugins` in `ansible.cfg`.
+Plugins live in `ansible/plugins/action_plugins/`. They are not an Ansible collection — they are standalone `.py` files loaded via `action_plugins` in `ansible.cfg`.
 
 ---
 
@@ -98,7 +98,7 @@ The `ssh-target` container generates a fresh ED25519 key pair into the `ssh-keys
 
 ## Adding a new plugin
 
-1. Drop `myplugin.py` in `ansible/action-plugins/`. Follow the local-gate pattern.
+1. Drop `myplugin.py` in `ansible/plugins/action_plugins/`. Follow the local-gate pattern.
 2. Add `tests/unit/test_myplugin.py` with fast-path and fallback classes.
 3. Add `tests/integration/playbooks/test_myplugin.yml` with `assert` tasks.
 4. Add a `test_myplugin()` function in `tests/integration/test_integration.py`.

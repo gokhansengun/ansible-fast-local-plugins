@@ -18,7 +18,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["ansible/action-plugins"]
+source = ["ansible/plugins/action_plugins", "ansible/collections"]
 omit = ["*/__pycache__/*"]
 
 [tool.coverage.report]

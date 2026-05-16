@@ -96,7 +96,7 @@ services:
     networks:
       - test-net
     working_dir: /workspace
-    command: "sh -c \"${PYTEST_CMD:-pytest tests/ -v --cov=ansible/action-plugins --cov-report=term-missing --cov-fail-under=80}\""
+    command: "sh -c \"${PYTEST_CMD:-pytest tests/ -v --cov=ansible/plugins/action_plugins --cov-report=term-missing --cov-fail-under=80}\""
 
 volumes:
   kubeconfig:

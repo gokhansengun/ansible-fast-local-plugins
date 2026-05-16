@@ -20,8 +20,9 @@ jobs:
 
       - name: Package plugins
         run: |
-          zip -j ansible-fast-local-plugins-${{ github.ref_name }}.zip \
-            ansible/action-plugins/*.py
+          zip -r ansible-fast-local-plugins-${{ github.ref_name }}.zip ansible/ \
+            --exclude "ansible/*/__pycache__/*" \
+            --exclude "ansible/*.pyc"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

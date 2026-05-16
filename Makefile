@@ -50,7 +50,7 @@ test:
 		echo "==> py=$$py  ansible-core=$$ac  hashivault=$$hv"; \
 		echo "------------------------------------------------------------"; \
 		PYTHON_VERSION=$$py ANSIBLE_CORE_VERSION=$$ac HASHIVAULT_MODULE_VERSION=$$hv \
-		PYTEST_CMD="pytest tests/ -v --cov=ansible/action-plugins --cov-report=term-missing --cov-report=html:/test-results/coverage-py$$py-ansible$$ac --cov-fail-under=80" \
+		PYTEST_CMD="pytest tests/ -v --cov=ansible/plugins/action_plugins --cov-report=term-missing --cov-report=html:/test-results/coverage-py$$py-ansible$$ac --cov-fail-under=80" \
 			$(COMPOSE) up --build -d; \
 		cid=$$(PYTHON_VERSION=$$py ANSIBLE_CORE_VERSION=$$ac HASHIVAULT_MODULE_VERSION=$$hv \
 			$(COMPOSE) ps -q controller 2>/dev/null | head -1); \
@@ -68,7 +68,7 @@ test-unit:
 		PYTHON_VERSION=$$py ANSIBLE_CORE_VERSION=$$ac HASHIVAULT_MODULE_VERSION=$$hv \
 			$(COMPOSE) run --rm --no-deps --entrypoint "" controller \
 			pytest tests/unit/ -v -m "not integration" \
-				--cov=ansible/action-plugins \
+				--cov=ansible/plugins/action_plugins \
 				--cov-report=term-missing \
 				--cov-fail-under=80)
 

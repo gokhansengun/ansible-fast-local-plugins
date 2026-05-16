@@ -64,15 +64,18 @@ make shell PAIR=3.14:2.20.5:5.6.0
 
 ```
 ansible/
-  action-plugins/         # The plugins (production code)
-    _action_utils.py      # Shared helpers: _is_local(), atomic_write(), _parse_mode()
-    stat.py
-    tempfile.py
-    copy.py
-    template.py
-    shell.py
-    hashivault_read.py
-    find_next_helm_release_number.py
+  plugins/
+    action_plugins/       # Short-name action plugin overrides (production code)
+      _action_utils.py    # Shared helpers: _is_local(), atomic_write(), _parse_mode()
+      stat.py
+      tempfile.py
+      copy.py
+      template.py
+      shell.py
+      hashivault_read.py
+      find_next_helm_release_number.py
+  collections/            # FQCN collection overrides (e.g. kubernetes.core)
+    ansible_collections/
 
 tests/
   conftest.py             # make_action() fixture factory for unit tests
@@ -125,7 +128,7 @@ pytest tests/unit/ -v
 
 ## Adding a new plugin
 
-1. Create `ansible/action-plugins/myplugin.py` following the local-gate pattern in any existing plugin.
+1. Create `ansible/plugins/action_plugins/myplugin.py` following the local-gate pattern in any existing plugin.
 2. Add `tests/unit/test_myplugin.py` with fast-path and fallback test classes.
 3. Add `tests/integration/playbooks/test_myplugin.yml` with inline `assert` tasks.
 4. Register it in `tests/integration/test_integration.py`.

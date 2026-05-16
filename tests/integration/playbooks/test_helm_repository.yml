@@ -1,0 +1,57 @@
+---
+- name: Integration tests for fast helm_repository plugin
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    # --- add repo (fast path via local connection) ---
+    - name: Add bitnami helm repository
+      kubernetes.core.helm_repository:
+        name: bitnami-aflp-test
+        repo_url: https://charts.bitnami.com/bitnami
+      register: r_add
+
+    - name: Assert repo was added
+      assert:
+        that:
+          - r_add.changed
+
+    # --- add same repo again with force_update (idempotent-safe) ---
+    - name: Add same repo with force_update
+      kubernetes.core.helm_repository:
+        name: bitnami-aflp-test
+        repo_url: https://charts.bitnami.com/bitnami
+        force_update: true
+      register: r_force
+
+    - name: Assert force_update succeeded
+      assert:
+        that:
+          - r_force.changed
+
+    # --- missing required args ---
+    - name: Call without repo_url (expect failure)
+      kubernetes.core.helm_repository:
+        name: broken-repo
+      register: r_missing
+      ignore_errors: true
+
+    - name: Assert missing repo_url fails
+      assert:
+        that:
+          - r_missing.failed
+          - "'repo_url' in r_missing.msg"
+
+    # --- invalid binary ---
+    - name: Call with nonexistent helm binary (expect failure)
+      kubernetes.core.helm_repository:
+        name: myrepo
+        repo_url: https://charts.bitnami.com/bitnami
+        binary_path: /nonexistent/helm
+      register: r_bad_bin
+      ignore_errors: true
+
+    - name: Assert bad binary path fails
+      assert:
+        that:
+          - r_bad_bin.failed

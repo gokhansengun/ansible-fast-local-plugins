@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 sys.path.insert(0, os.path.abspath(
-    os.path.join(os.path.dirname(__file__), '../../ansible/action-plugins')
+    os.path.join(os.path.dirname(__file__), '../../ansible/plugins/action_plugins')
 ))
 
 from tests.conftest import make_action, mock_builtin_run

@@ -43,7 +43,7 @@ jobs:
             --volume /tmp/test-results:/test-results \
             controller \
             pytest tests/ -v \
-              --cov=ansible/action-plugins \
+              --cov=ansible/plugins/action_plugins \
               --cov-report=term-missing \
               --cov-report=xml:/test-results/coverage.xml \
               --cov-fail-under=80
