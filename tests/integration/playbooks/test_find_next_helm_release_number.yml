@@ -1,0 +1,33 @@
+---
+- name: Integration tests for find_next_helm_release_number plugin
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    # --- release with existing versions 2 and 3 → current=3, next=4 ---
+    - name: Get next version for test-release (versions 2 and 3 seeded)
+      find_next_helm_release_number:
+        release_name: test-release
+        namespace: test-ns
+      register: r1
+
+    - name: Assert current=3 next=4
+      assert:
+        that:
+          - r1.current_version == 3
+          - r1.next_version == 4
+          - not r1.changed
+          - r1.modified_at is defined
+
+    # --- release with no existing versions → current=0, next=1 ---
+    - name: Get next version for nonexistent release
+      find_next_helm_release_number:
+        release_name: nonexistent-release
+        namespace: test-ns-empty
+      register: r2
+
+    - name: Assert no existing release gives version 1
+      assert:
+        that:
+          - r2.current_version == 0
+          - r2.next_version == 1

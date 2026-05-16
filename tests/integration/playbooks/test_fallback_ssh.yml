@@ -1,0 +1,103 @@
+---
+# All plugins run over SSH to the ssh-target container.
+# Verifies each plugin correctly delegates to the standard Ansible module/action.
+- name: Fallback tests - all plugins over SSH connection
+  hosts: ssh_targets
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_fallback_test
+
+  tasks:
+    - name: Create work directory on SSH target
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    # --- stat fallback ---
+    - name: Stat /etc/hostname via SSH (must fall back to standard stat module)
+      stat:
+        path: /etc/hostname
+      register: s
+
+    - name: Assert stat fallback result
+      assert:
+        that:
+          - s.stat.exists
+          - s.stat.isreg
+
+    # --- tempfile fallback ---
+    - name: Create temp file via SSH
+      tempfile:
+        state: file
+        path: "{{ work_dir }}"
+      register: tf
+
+    - name: Assert tempfile created on remote
+      assert:
+        that:
+          - tf.changed
+          - tf.path is defined
+
+    # --- copy fallback ---
+    - name: Copy content via SSH
+      copy:
+        content: "ssh fallback content"
+        dest: "{{ work_dir }}/copy_out.txt"
+      register: cp
+
+    - name: Assert copy worked via SSH
+      assert:
+        that:
+          - cp.changed
+
+    - name: Copy same content again (idempotency via SSH)
+      copy:
+        content: "ssh fallback content"
+        dest: "{{ work_dir }}/copy_out.txt"
+      register: cp2
+
+    - name: Assert idempotent via SSH
+      assert:
+        that:
+          - not cp2.changed
+
+    # --- shell fallback ---
+    - name: Run echo via SSH
+      shell:
+        cmd: "echo 'ssh_hello'"
+      register: sh
+
+    - name: Assert shell output via SSH
+      assert:
+        that:
+          - sh.stdout == 'ssh_hello'
+          - sh.rc == 0
+
+    # --- template fallback ---
+    - name: Render template via SSH
+      template:
+        src: "{{ playbook_dir }}/../templates/greeting.j2"
+        dest: "{{ work_dir }}/greeting_ssh.txt"
+      vars:
+        recipient: "SSH"
+      register: tmpl
+
+    - name: Assert template rendered via SSH
+      assert:
+        that:
+          - tmpl.changed
+
+    - name: Read rendered file via SSH
+      shell:
+        cmd: "cat {{ work_dir }}/greeting_ssh.txt"
+      register: cat_tmpl
+
+    - name: Assert rendered content via SSH
+      assert:
+        that:
+          - "'Hello, SSH!' in cat_tmpl.stdout"
+
+    - name: Cleanup work directory on SSH target
+      file:
+        path: "{{ work_dir }}"
+        state: absent

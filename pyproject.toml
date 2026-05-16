@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "ansible-fast-local-plugins-tests"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+cache_dir = "/test-results/.pytest_cache"
+markers = [
+    "integration: tests that require all Docker Compose services",
+    "unit: pure in-process tests with no external services",
+]
+
+[tool.coverage.run]
+source = ["ansible/action-plugins"]
+omit = ["*/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]

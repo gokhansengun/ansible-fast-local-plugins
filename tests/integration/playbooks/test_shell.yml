@@ -1,0 +1,104 @@
+---
+- name: Integration tests for fast shell plugin
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_test_shell
+
+  tasks:
+    - name: Create work directory
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    # --- basic command ---
+    - name: Run echo command
+      shell:
+        cmd: "echo hello"
+      register: r
+
+    - name: Assert echo output
+      assert:
+        that:
+          - r.stdout == 'hello'
+          - r.rc == 0
+          - r.changed
+
+    # --- failing command ---
+    - name: Run failing command (ignore errors)
+      shell:
+        cmd: "exit 42"
+      register: r_fail
+      ignore_errors: true
+
+    - name: Assert non-zero rc
+      assert:
+        that:
+          - r_fail.rc == 42
+          - r_fail.failed
+
+    # --- chdir ---
+    - name: Run pwd in work_dir
+      shell:
+        cmd: "pwd"
+        chdir: "{{ work_dir }}"
+      register: r_pwd
+
+    - name: Assert chdir works
+      assert:
+        that:
+          - work_dir in r_pwd.stdout
+
+    # --- creates ---
+    - name: Create marker file
+      copy:
+        content: ""
+        dest: "{{ work_dir }}/marker.txt"
+
+    - name: Shell with creates - should skip
+      shell:
+        cmd: "echo should_not_run"
+        creates: "{{ work_dir }}/marker.txt"
+      register: r_creates
+
+    - name: Assert creates caused skip
+      assert:
+        that:
+          - r_creates.skipped | default(false)
+
+    # --- removes ---
+    - name: Shell with removes - should skip because file does not exist
+      shell:
+        cmd: "echo should_not_run"
+        removes: "{{ work_dir }}/nonexistent.txt"
+      register: r_removes
+
+    - name: Assert removes caused skip
+      assert:
+        that:
+          - r_removes.skipped | default(false)
+
+    # --- stdin ---
+    - name: Pass stdin to command
+      shell:
+        cmd: "cat"
+        stdin: "from stdin"
+      register: r_stdin
+
+    - name: Assert stdin content received
+      assert:
+        that:
+          - "'from stdin' in r_stdin.stdout"
+
+    # --- timing fields ---
+    - name: Assert timing fields present
+      assert:
+        that:
+          - r.start is defined
+          - r.end is defined
+          - r.delta is defined
+
+    - name: Cleanup
+      file:
+        path: "{{ work_dir }}"
+        state: absent

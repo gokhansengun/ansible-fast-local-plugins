@@ -1,0 +1,83 @@
+---
+- name: Integration tests for fast template plugin
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_test_template
+    recipient: "World"
+
+  tasks:
+    - name: Create work directory
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    # --- basic rendering ---
+    - name: Render greeting template
+      template:
+        src: "{{ playbook_dir }}/../templates/greeting.j2"
+        dest: "{{ work_dir }}/greeting.txt"
+      register: r1
+
+    - name: Assert first render changed
+      assert:
+        that:
+          - r1.changed
+          - r1.checksum is defined
+
+    - name: Read rendered file
+      shell:
+        cmd: "cat {{ work_dir }}/greeting.txt"
+      register: cat_out
+
+    - name: Assert rendered content
+      assert:
+        that:
+          - "'Hello, World!' in cat_out.stdout"
+
+    # --- idempotency ---
+    - name: Render same template again
+      template:
+        src: "{{ playbook_dir }}/../templates/greeting.j2"
+        dest: "{{ work_dir }}/greeting.txt"
+      register: r2
+
+    - name: Assert second render is not changed
+      assert:
+        that:
+          - not r2.changed
+
+    # --- force=false ---
+    - name: Render with force=false to existing file
+      template:
+        src: "{{ playbook_dir }}/../templates/greeting.j2"
+        dest: "{{ work_dir }}/greeting.txt"
+        force: false
+      register: r3
+
+    - name: Assert force=false skipped
+      assert:
+        that:
+          - not r3.changed
+
+    # --- mode ---
+    - name: Render with mode
+      template:
+        src: "{{ playbook_dir }}/../templates/greeting.j2"
+        dest: "{{ work_dir }}/greeting_mode.txt"
+        mode: "0600"
+
+    - name: Stat the mode file
+      stat:
+        path: "{{ work_dir }}/greeting_mode.txt"
+      register: s_mode
+
+    - name: Assert mode applied
+      assert:
+        that:
+          - s_mode.stat.mode == '0600'
+
+    - name: Cleanup
+      file:
+        path: "{{ work_dir }}"
+        state: absent

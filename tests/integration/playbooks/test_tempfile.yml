@@ -1,0 +1,75 @@
+---
+- name: Integration tests for fast tempfile plugin
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    # --- create file ---
+    - name: Create temp file
+      tempfile:
+        state: file
+      register: tf
+
+    - name: Assert temp file created
+      assert:
+        that:
+          - tf.changed
+          - tf.state == 'file'
+          - tf.path is defined
+
+    - name: Verify temp file exists on disk
+      stat:
+        path: "{{ tf.path }}"
+      register: s
+
+    - name: Assert temp file is a regular file
+      assert:
+        that:
+          - s.stat.exists
+          - s.stat.isreg
+
+    # --- create directory ---
+    - name: Create temp directory
+      tempfile:
+        state: directory
+      register: td
+
+    - name: Assert temp dir created
+      assert:
+        that:
+          - td.changed
+          - td.state == 'directory'
+
+    - name: Verify temp dir exists
+      stat:
+        path: "{{ td.path }}"
+      register: sd
+
+    - name: Assert temp dir is a directory
+      assert:
+        that:
+          - sd.stat.isdir
+
+    # --- custom prefix and suffix ---
+    - name: Create temp file with prefix and suffix
+      tempfile:
+        state: file
+        prefix: "mytest_"
+        suffix: ".log"
+      register: tf2
+
+    - name: Assert prefix and suffix
+      assert:
+        that:
+          - tf2.path | basename | regex_search('^mytest_') is not none
+          - tf2.path.endswith('.log')
+
+    # --- Cleanup ---
+    - name: Remove temp files and dirs
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ tf.path }}"
+        - "{{ td.path }}"
+        - "{{ tf2.path }}"

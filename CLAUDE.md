@@ -1,0 +1,118 @@
+# CLAUDE.md — project guide for Claude Code
+
+## What this project is
+
+Performance-optimised Ansible **action plugins** for a local-connection-only controller. Every plugin checks whether the connection is local (`_is_local()`); if so it executes in-process (no SSH, no subprocess spawning a new Python interpreter). If not, it falls back transparently to the equivalent standard Ansible module or action plugin.
+
+Plugins live in `ansible/action-plugins/`. They are not an Ansible collection — they are standalone `.py` files loaded via `action_plugins` in `ansible.cfg`.
+
+---
+
+## Key patterns
+
+### The local/fallback gate
+
+Every plugin's `run()` starts with this:
+
+```python
+if not _is_local(conn) or self._play_context.become:
+    return self._execute_module(task_vars=task_vars, ...)  # or instantiate _Standard
+```
+
+`_is_local()` is in `_action_utils.py`. It checks `connection.transport`, `connection._load_name`, and `type(connection).__module__`. Setting `conn.transport = 'local'` in tests is sufficient to trigger the fast path.
+
+### Atomic writes
+
+`atomic_write()` in `_action_utils.py` writes to a same-directory temp file then `shutil.move()`s it. Used by `copy.py` and `template.py`.
+
+### Copy vs Template fallback style
+
+`copy.py` and `template.py` instantiate the standard action plugin class directly (`from ansible.plugins.action.copy import ActionModule as _Standard`). `stat.py`, `tempfile.py`, `hashivault_read.py`, and `find_next_helm_release_number.py` call `self._execute_module()`.
+
+---
+
+## Test architecture
+
+### Unit tests (`tests/unit/`)
+
+Use `make_action(plugin_name, args, **kwargs)` from `tests/conftest.py`. It wires a real `DataLoader` + `Templar` with `MagicMock` task/connection/play-context so `ActionModule.__init__` and `ActionBase.run()` succeed without a real Ansible inventory.
+
+To test the **fast path**: `make_action('stat', {...})` — defaults to `local=True`.  
+To test the **fallback gate**: `make_action('stat', {...}, local=False)`, then assert `_execute_module` was called via `patch.object`.
+
+Unit tests do not require any Docker service. Run with:
+
+```
+make test-unit
+```
+
+### Integration tests (`tests/integration/`)
+
+`test_integration.py` is a thin pytest wrapper that invokes `ansible-playbook` as a subprocess and fails the test if the exit code is non-zero. The playbooks contain the actual assertions via Ansible's `assert` module.
+
+Integration tests require the full Docker Compose stack (vault, kind, ssh-target). Run with:
+
+```
+make test-int   # or: make test  (unit + integration)
+```
+
+---
+
+## Test matrix
+
+Defined at the top of `Makefile`:
+
+```makefile
+MATRIX := 3.12:2.19.3:5.4.0  3.14:2.20.5:5.6.0
+#          ^Python  ^ansible-core  ^ansible-modules-hashivault
+```
+
+The third slot exists because `ansible-modules-hashivault` versions are tied to `ansible-core`. Adding a new pair means appending one entry here (and in `.github/workflows/ci.yml`).
+
+---
+
+## Docker Compose services
+
+| Service | Image | Purpose |
+|---|---|---|
+| `dind` | `docker:24-dind` | Docker daemon for kind to create containers in |
+| `kind-setup` | custom Alpine | Creates a 1-node kind cluster inside DinD; exposes API at `dind:6443` |
+| `vault` | `hashicorp/vault:1.17` | Dev-mode Vault; root token `root` |
+| `vault-seed` | same vault image | One-shot: seeds KV v1 at `secret/test-kv1`, KV v2 at `secretv2/test-kv2` |
+| `ssh-target` | custom Debian | openssh-server; generates ED25519 key pair into `ssh-keys` volume |
+| `controller` | custom Python | Runs pytest; mounts repo read-only, kubeconfig and ssh-keys volumes |
+
+### Kind networking
+
+Kind runs inside DinD. `kind-cluster.yaml` sets `apiServerAddress: 0.0.0.0` and `apiServerPort: 6443`, and maps `containerPort 6443 → hostPort 6443` on the DinD container. `setup.sh` patches the exported kubeconfig so `server:` points to `https://dind:6443` with `insecure-skip-tls-verify: true` (the TLS cert is issued for `127.0.0.1`, not `dind`).
+
+Pre-seeded Kubernetes objects:
+- Namespace `test-ns` with Helm release secrets for `test-release` at versions 2 and 3 (both `status=deployed`), so `current_version=3, next_version=4`.
+- Namespace `test-ns-empty` — no secrets, so `current_version=0, next_version=1`.
+
+### SSH target
+
+The `ssh-target` container generates a fresh ED25519 key pair into the `ssh-keys` named volume on every cold start. The controller's `entrypoint.sh` waits for `/ssh-keys/id_ed25519` before running pytest. The SSH inventory at `tests/integration/inventory/ssh.ini` references that path.
+
+---
+
+## Adding a new plugin
+
+1. Drop `myplugin.py` in `ansible/action-plugins/`. Follow the local-gate pattern.
+2. Add `tests/unit/test_myplugin.py` with fast-path and fallback classes.
+3. Add `tests/integration/playbooks/test_myplugin.yml` with `assert` tasks.
+4. Add a `test_myplugin()` function in `tests/integration/test_integration.py`.
+5. If the plugin uses external services, add them to `docker/docker-compose.yml` and seed data if needed.
+
+## Adding a new matrix pair
+
+1. Append `PY:AC:HV` to `MATRIX` in `Makefile`.
+2. Add a matching `include` entry in `.github/workflows/ci.yml`.
+
+---
+
+## Dependency notes
+
+- `hvac` — Python client used by `hashivault_read.py` in the fast path.
+- `ansible-modules-hashivault` — provides the `hashivault_read` *module* used in the fallback path; version is coupled to `ansible-core` (see matrix).
+- `kubectl` — installed in the controller image; used by `find_next_helm_release_number.py` via `subprocess.run`.

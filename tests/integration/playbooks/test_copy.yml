@@ -1,0 +1,83 @@
+---
+- name: Integration tests for fast copy plugin
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_test_copy
+
+  tasks:
+    - name: Create work directory
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    # --- basic write ---
+    - name: Copy content to file
+      copy:
+        content: "hello world"
+        dest: "{{ work_dir }}/out.txt"
+      register: r1
+
+    - name: Assert first write changed
+      assert:
+        that:
+          - r1.changed
+          - r1.checksum is defined
+
+    - name: Verify file content
+      shell:
+        cmd: "cat {{ work_dir }}/out.txt"
+      register: cat_out
+
+    - name: Assert content matches
+      assert:
+        that:
+          - cat_out.stdout == 'hello world'
+
+    # --- idempotency ---
+    - name: Copy same content again
+      copy:
+        content: "hello world"
+        dest: "{{ work_dir }}/out.txt"
+      register: r2
+
+    - name: Assert second write is not changed
+      assert:
+        that:
+          - not r2.changed
+
+    # --- force=false ---
+    - name: Copy with force=false to existing file
+      copy:
+        content: "new content"
+        dest: "{{ work_dir }}/out.txt"
+        force: false
+      register: r3
+
+    - name: Assert force=false did not overwrite
+      assert:
+        that:
+          - not r3.changed
+
+    # --- mode setting ---
+    - name: Copy with mode
+      copy:
+        content: "secured"
+        dest: "{{ work_dir }}/secured.txt"
+        mode: "0600"
+      register: r4
+
+    - name: Stat the secured file
+      stat:
+        path: "{{ work_dir }}/secured.txt"
+      register: s4
+
+    - name: Assert mode is 0600
+      assert:
+        that:
+          - s4.stat.mode == '0600'
+
+    - name: Cleanup
+      file:
+        path: "{{ work_dir }}"
+        state: absent

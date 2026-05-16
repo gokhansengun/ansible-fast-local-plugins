@@ -1,0 +1,72 @@
+---
+- name: Integration tests for fast hashivault_read plugin
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    # --- KV v1 full secret (dedicated kv1-test mount: Vault dev mode uses KV v2 for 'secret') ---
+    - name: Read KV v1 secret
+      hashivault_read:
+        url: "{{ lookup('env', 'VAULT_ADDR') }}"
+        token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+        mount_point: kv1-test
+        secret: test-kv1
+        version: 1
+      register: kv1
+
+    - name: Assert KV v1 full value
+      assert:
+        that:
+          - not kv1.failed | default(false)
+          - kv1.value.username == 'admin'
+          - kv1.value.password == 's3cr3t'
+          - not kv1.changed
+
+    # --- KV v1 key extraction ---
+    - name: Read KV v1 specific key
+      hashivault_read:
+        url: "{{ lookup('env', 'VAULT_ADDR') }}"
+        token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+        mount_point: kv1-test
+        secret: test-kv1
+        key: password
+        version: 1
+      register: kv1_key
+
+    - name: Assert KV v1 key extracted
+      assert:
+        that:
+          - kv1_key.value == 's3cr3t'
+
+    # --- KV v2 full secret ---
+    - name: Read KV v2 secret
+      hashivault_read:
+        url: "{{ lookup('env', 'VAULT_ADDR') }}"
+        token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+        mount_point: secretv2
+        secret: test-kv2
+        version: 2
+      register: kv2
+
+    - name: Assert KV v2 full value
+      assert:
+        that:
+          - kv2.value.api_key == 'my-api-key-value'
+          - kv2.value.db_host == 'postgres.internal'
+          - kv2.metadata is defined
+
+    # --- KV v2 key extraction ---
+    - name: Read KV v2 specific key
+      hashivault_read:
+        url: "{{ lookup('env', 'VAULT_ADDR') }}"
+        token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+        mount_point: secretv2
+        secret: test-kv2
+        key: api_key
+        version: 2
+      register: kv2_key
+
+    - name: Assert KV v2 key extracted
+      assert:
+        that:
+          - kv2_key.value == 'my-api-key-value'

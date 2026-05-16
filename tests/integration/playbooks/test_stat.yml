@@ -1,0 +1,98 @@
+---
+- name: Integration tests for fast stat plugin
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_test_stat
+
+  tasks:
+    - name: Create work directory
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Create test file
+      copy:
+        content: "hello world"
+        dest: "{{ work_dir }}/test.txt"
+        mode: "0644"
+
+    # --- existing regular file ---
+    - name: Stat existing file
+      stat:
+        path: "{{ work_dir }}/test.txt"
+      register: s
+
+    - name: Assert existing file stat
+      assert:
+        that:
+          - s.stat.exists
+          - s.stat.isreg
+          - not s.stat.isdir
+          - s.stat.size == 11
+          - s.stat.checksum is defined
+          - s.stat.mode == '0644'
+          - s.stat.pw_name is defined
+          - s.stat.gr_name is defined
+          - not s.changed
+
+    # --- missing file ---
+    - name: Stat missing file
+      stat:
+        path: "{{ work_dir }}/does_not_exist.txt"
+      register: s_missing
+
+    - name: Assert missing file
+      assert:
+        that:
+          - not s_missing.stat.exists
+
+    # --- directory ---
+    - name: Stat directory
+      stat:
+        path: "{{ work_dir }}"
+      register: s_dir
+
+    - name: Assert directory stat
+      assert:
+        that:
+          - s_dir.stat.exists
+          - s_dir.stat.isdir
+          - not s_dir.stat.isreg
+
+    # --- symlink (follow=false) ---
+    - name: Create symlink
+      file:
+        src: "{{ work_dir }}/test.txt"
+        dest: "{{ work_dir }}/link.txt"
+        state: link
+
+    - name: Stat symlink without follow
+      stat:
+        path: "{{ work_dir }}/link.txt"
+        follow: false
+      register: s_lnk
+
+    - name: Assert symlink
+      assert:
+        that:
+          - s_lnk.stat.islnk
+          - s_lnk.stat.lnk_target is defined
+
+    # --- checksum algorithm ---
+    - name: Stat with sha256
+      stat:
+        path: "{{ work_dir }}/test.txt"
+        checksum_algorithm: sha256
+      register: s_sha
+
+    - name: Assert sha256 checksum length
+      assert:
+        that:
+          - s_sha.stat.checksum | length == 64
+
+    - name: Cleanup
+      file:
+        path: "{{ work_dir }}"
+        state: absent

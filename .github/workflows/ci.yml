@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: "py${{ matrix.python-version }} / ansible-core ${{ matrix.ansible-core }}"
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.12"
+            ansible-core: "2.19.3"
+            hashivault-module: "5.4.0"
+          - python-version: "3.14"
+            ansible-core: "2.20.5"
+            hashivault-module: "5.6.0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build controller image
+        run: |
+          docker compose -f docker/docker-compose.yml build controller
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+          ANSIBLE_CORE_VERSION: ${{ matrix.ansible-core }}
+          HASHIVAULT_MODULE_VERSION: ${{ matrix.hashivault-module }}
+
+      - name: Run full test suite
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm controller \
+            pytest tests/ -v \
+              --cov=ansible/action-plugins \
+              --cov-report=term-missing \
+              --cov-report=xml:/test-results/coverage.xml \
+              --cov-fail-under=80
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+          ANSIBLE_CORE_VERSION: ${{ matrix.ansible-core }}
+          HASHIVAULT_MODULE_VERSION: ${{ matrix.hashivault-module }}
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-py${{ matrix.python-version }}-ansible${{ matrix.ansible-core }}
+          path: /tmp/test-results/coverage.xml
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v --remove-orphans
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+          ANSIBLE_CORE_VERSION: ${{ matrix.ansible-core }}
+          HASHIVAULT_MODULE_VERSION: ${{ matrix.hashivault-module }}
