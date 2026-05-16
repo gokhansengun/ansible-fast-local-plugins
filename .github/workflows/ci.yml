@@ -85,7 +85,6 @@ jobs:
           name: "Tests (py${{ matrix.python-version }} / ansible-core ${{ matrix.ansible-core }})"
           path: /tmp/test-results/junit.xml
           reporter: java-junit
-          fail-on-error: false
 
       - name: Tear down stack
         if: always()
