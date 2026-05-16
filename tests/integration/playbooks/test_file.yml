@@ -1,0 +1,224 @@
+---
+- name: Integration tests for fast file plugin
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_test_file
+
+  tasks:
+    - name: Ensure clean work directory
+      file:
+        path: "{{ work_dir }}"
+        state: absent
+
+    - name: Create work directory
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    # ------------------------------------------------------------------ #
+    # state: directory                                                     #
+    # ------------------------------------------------------------------ #
+    - name: Create directory
+      file:
+        path: "{{ work_dir }}/mydir"
+        state: directory
+        mode: "0750"
+      register: r_mkdir
+
+    - name: Assert directory created
+      assert:
+        that:
+          - r_mkdir.changed
+
+    - name: Create same directory again (idempotency)
+      file:
+        path: "{{ work_dir }}/mydir"
+        state: directory
+        mode: "0750"
+      register: r_mkdir_idem
+
+    - name: Assert directory creation is idempotent
+      assert:
+        that:
+          - not r_mkdir_idem.changed
+
+    # ------------------------------------------------------------------ #
+    # state: touch                                                         #
+    # ------------------------------------------------------------------ #
+    - name: Touch a new file
+      file:
+        path: "{{ work_dir }}/touched.txt"
+        state: touch
+        mode: "0640"
+      register: r_touch
+
+    - name: Assert touch created file
+      assert:
+        that:
+          - r_touch.changed
+
+    - name: Stat the touched file to verify mode
+      stat:
+        path: "{{ work_dir }}/touched.txt"
+      register: r_stat
+
+    - name: Assert touch set the correct mode
+      assert:
+        that:
+          - r_stat.stat.mode == '0640'
+
+    # ------------------------------------------------------------------ #
+    # state: file (attribute update)                                       #
+    # ------------------------------------------------------------------ #
+    - name: Change mode on existing file
+      file:
+        path: "{{ work_dir }}/touched.txt"
+        state: file
+        mode: "0600"
+      register: r_chmod
+
+    - name: Assert mode was changed
+      assert:
+        that:
+          - r_chmod.changed
+
+    - name: Apply same mode again (idempotency)
+      file:
+        path: "{{ work_dir }}/touched.txt"
+        state: file
+        mode: "0600"
+      register: r_chmod_idem
+
+    - name: Assert mode change is idempotent
+      assert:
+        that:
+          - not r_chmod_idem.changed
+
+    - name: State=file on nonexistent path must fail
+      file:
+        path: "{{ work_dir }}/ghost.txt"
+        state: file
+      register: r_ghost
+      ignore_errors: true
+
+    - name: Assert missing file is an error
+      assert:
+        that:
+          - r_ghost.failed
+
+    # ------------------------------------------------------------------ #
+    # state: link                                                          #
+    # ------------------------------------------------------------------ #
+    - name: Create symlink
+      file:
+        path: "{{ work_dir }}/link.txt"
+        src: "{{ work_dir }}/touched.txt"
+        state: link
+      register: r_link
+
+    - name: Assert symlink created
+      assert:
+        that:
+          - r_link.changed
+
+    - name: Create same symlink again (idempotency)
+      file:
+        path: "{{ work_dir }}/link.txt"
+        src: "{{ work_dir }}/touched.txt"
+        state: link
+      register: r_link_idem
+
+    - name: Assert symlink creation is idempotent
+      assert:
+        that:
+          - not r_link_idem.changed
+
+    # ------------------------------------------------------------------ #
+    # state: hard                                                          #
+    # ------------------------------------------------------------------ #
+    - name: Create hard link
+      file:
+        path: "{{ work_dir }}/hardlink.txt"
+        src: "{{ work_dir }}/touched.txt"
+        state: hard
+      register: r_hard
+
+    - name: Assert hard link created
+      assert:
+        that:
+          - r_hard.changed
+
+    - name: Create same hard link again (idempotency)
+      file:
+        path: "{{ work_dir }}/hardlink.txt"
+        src: "{{ work_dir }}/touched.txt"
+        state: hard
+      register: r_hard_idem
+
+    - name: Assert hard link creation is idempotent
+      assert:
+        that:
+          - not r_hard_idem.changed
+
+    # ------------------------------------------------------------------ #
+    # recurse                                                              #
+    # ------------------------------------------------------------------ #
+    - name: Create nested directory tree
+      file:
+        path: "{{ work_dir }}/tree/sub"
+        state: directory
+
+    - name: Touch file inside tree
+      file:
+        path: "{{ work_dir }}/tree/file.txt"
+        state: touch
+
+    - name: Apply mode recursively
+      file:
+        path: "{{ work_dir }}/tree"
+        state: directory
+        mode: "0755"
+        recurse: true
+      register: r_recurse
+
+    - name: Assert recursive application ran
+      assert:
+        that:
+          - not r_recurse.failed | default(false)
+
+    # ------------------------------------------------------------------ #
+    # state: absent                                                        #
+    # ------------------------------------------------------------------ #
+    - name: Remove file
+      file:
+        path: "{{ work_dir }}/hardlink.txt"
+        state: absent
+      register: r_absent_file
+
+    - name: Assert file was removed
+      assert:
+        that:
+          - r_absent_file.changed
+
+    - name: Remove same path again (idempotency)
+      file:
+        path: "{{ work_dir }}/hardlink.txt"
+        state: absent
+      register: r_absent_idem
+
+    - name: Assert absent is idempotent
+      assert:
+        that:
+          - not r_absent_idem.changed
+
+    - name: Remove work directory tree
+      file:
+        path: "{{ work_dir }}"
+        state: absent
+      register: r_absent_dir
+
+    - name: Assert directory removed
+      assert:
+        that:
+          - r_absent_dir.changed

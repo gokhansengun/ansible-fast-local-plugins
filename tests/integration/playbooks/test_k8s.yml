@@ -1,0 +1,240 @@
+---
+- name: Integration tests for fast k8s plugin
+  hosts: local
+  gather_facts: false
+  vars:
+    kubeconfig: /kubeconfig/config
+    ns: test-ns
+    cm_name: aflp-test-cm
+
+  tasks:
+    # ------------------------------------------------------------------ #
+    # Cleanup: ensure test ConfigMap does not exist before we start       #
+    # ------------------------------------------------------------------ #
+    - name: Delete test ConfigMap if it exists (pre-test cleanup)
+      kubernetes.core.k8s:
+        state: absent
+        kind: ConfigMap
+        name: "{{ cm_name }}"
+        namespace: "{{ ns }}"
+        kubeconfig: "{{ kubeconfig }}"
+
+    # ------------------------------------------------------------------ #
+    # state: present – create                                             #
+    # ------------------------------------------------------------------ #
+    - name: Create ConfigMap (state=present)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ cm_name }}"
+            namespace: "{{ ns }}"
+          data:
+            key1: value1
+      register: r_create
+
+    - name: Assert ConfigMap was created
+      assert:
+        that:
+          - not r_create.failed | default(false)
+          - r_create.changed
+
+    # ------------------------------------------------------------------ #
+    # state: present – idempotency                                        #
+    # ------------------------------------------------------------------ #
+    - name: Apply same ConfigMap again (idempotency)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ cm_name }}"
+            namespace: "{{ ns }}"
+          data:
+            key1: value1
+      register: r_idem
+
+    - name: Assert idempotent apply reports no change
+      assert:
+        that:
+          - not r_idem.failed | default(false)
+          - not r_idem.changed
+
+    # ------------------------------------------------------------------ #
+    # state: present – update                                             #
+    # ------------------------------------------------------------------ #
+    - name: Update ConfigMap with new data
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ cm_name }}"
+            namespace: "{{ ns }}"
+          data:
+            key1: value1
+            key2: value2
+      register: r_update
+
+    - name: Assert update was applied
+      assert:
+        that:
+          - not r_update.failed | default(false)
+          - r_update.changed
+
+    # ------------------------------------------------------------------ #
+    # state: latest – idempotent like present                            #
+    # ------------------------------------------------------------------ #
+    - name: Apply same definition with state=latest (no changes expected)
+      kubernetes.core.k8s:
+        state: latest
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ cm_name }}"
+            namespace: "{{ ns }}"
+          data:
+            key1: value1
+            key2: value2
+      register: r_latest
+
+    - name: Assert state=latest succeeded
+      assert:
+        that:
+          - not r_latest.failed | default(false)
+          - not r_latest.changed
+
+    # ------------------------------------------------------------------ #
+    # state: patched – add a label                                        #
+    # ------------------------------------------------------------------ #
+    - name: Patch ConfigMap to add a label
+      kubernetes.core.k8s:
+        state: patched
+        kind: ConfigMap
+        api_version: v1
+        name: "{{ cm_name }}"
+        namespace: "{{ ns }}"
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          metadata:
+            labels:
+              patched-by: aflp
+      register: r_patch
+
+    - name: Assert patch succeeded
+      assert:
+        that:
+          - not r_patch.failed | default(false)
+          - r_patch.changed
+
+    # ------------------------------------------------------------------ #
+    # state: absent – delete                                              #
+    # ------------------------------------------------------------------ #
+    - name: Delete the ConfigMap
+      kubernetes.core.k8s:
+        state: absent
+        kind: ConfigMap
+        name: "{{ cm_name }}"
+        namespace: "{{ ns }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: r_delete
+
+    - name: Assert ConfigMap was deleted
+      assert:
+        that:
+          - not r_delete.failed | default(false)
+          - r_delete.changed
+
+    # ------------------------------------------------------------------ #
+    # state: absent – idempotency                                         #
+    # ------------------------------------------------------------------ #
+    - name: Delete same ConfigMap again (idempotency)
+      kubernetes.core.k8s:
+        state: absent
+        kind: ConfigMap
+        name: "{{ cm_name }}"
+        namespace: "{{ ns }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: r_delete_idem
+
+    - name: Assert absent is idempotent
+      assert:
+        that:
+          - not r_delete_idem.failed | default(false)
+          - not r_delete_idem.changed
+
+    # ------------------------------------------------------------------ #
+    # state: absent – missing kind must fail                              #
+    # ------------------------------------------------------------------ #
+    - name: Call state=absent without kind (expect failure)
+      kubernetes.core.k8s:
+        state: absent
+        name: some-resource
+        kubeconfig: "{{ kubeconfig }}"
+      register: r_no_kind
+      ignore_errors: true
+
+    - name: Assert missing kind fails
+      assert:
+        that:
+          - r_no_kind.failed
+          - "'kind' in r_no_kind.msg"
+
+    # ------------------------------------------------------------------ #
+    # Non-core API: create and delete a Deployment                        #
+    # ------------------------------------------------------------------ #
+    - name: Create a minimal Deployment (apps/v1)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: aflp-test-deploy
+            namespace: "{{ ns }}"
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: aflp-test
+            template:
+              metadata:
+                labels:
+                  app: aflp-test
+              spec:
+                containers:
+                  - name: pause
+                    image: registry.k8s.io/pause:3.9
+      register: r_deploy
+
+    - name: Assert Deployment was created
+      assert:
+        that:
+          - not r_deploy.failed | default(false)
+          - r_deploy.changed
+
+    - name: Delete the Deployment
+      kubernetes.core.k8s:
+        state: absent
+        kind: Deployment
+        api_version: apps/v1
+        name: aflp-test-deploy
+        namespace: "{{ ns }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: r_deploy_delete
+
+    - name: Assert Deployment was deleted
+      assert:
+        that:
+          - not r_deploy_delete.failed | default(false)
+          - r_deploy_delete.changed

@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '../../ansible/plugins/action_plugins')
+))
+
+from tests.conftest import make_action, mock_builtin_run
+
+
+class TestCommandFastPath:
+    def test_basic_command(self):
+        action = make_action('command', {'_raw_params': 'echo hello'})
+        result = action.run(task_vars={})
+        assert not result.get('failed')
+        assert result['stdout'] == 'hello'
+        assert result['rc'] == 0
+
+    def test_cmd_key(self):
+        action = make_action('command', {'cmd': 'echo world'})
+        result = action.run(task_vars={})
+        assert result['stdout'] == 'world'
+
+    def test_argv_form(self):
+        action = make_action('command', {'argv': ['echo', 'from argv']})
+        result = action.run(task_vars={})
+        assert result['stdout'] == 'from argv'
+
+    def test_argv_takes_precedence_over_raw_params(self):
+        action = make_action('command', {'argv': ['echo', 'argv'], '_raw_params': 'echo raw'})
+        result = action.run(task_vars={})
+        assert result['stdout'] == 'argv'
+
+    def test_shell_pipe_does_not_work(self):
+        # Without a shell, the pipe character is passed as a literal argument,
+        # so the command will fail or produce unexpected output — not pipe output.
+        action = make_action('command', {'_raw_params': 'echo hello | cat'})
+        result = action.run(task_vars={})
+        # The pipe and 'cat' are passed as arguments to echo, not interpreted as a pipe.
+        assert 'hello' in result['stdout']
+        assert '|' in result['stdout']
+
+    def test_failed_command(self):
+        action = make_action('command', {'_raw_params': 'false'})
+        result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert result['rc'] == 1
+
+    def test_stderr_captured(self):
+        action = make_action('command', {'argv': ['/bin/sh', '-c', 'echo err >&2']})
+        result = action.run(task_vars={})
+        assert result['stderr'] == 'err'
+
+    def test_chdir(self, tmp_path):
+        action = make_action('command', {'_raw_params': 'pwd', 'chdir': str(tmp_path)})
+        result = action.run(task_vars={})
+        assert os.path.realpath(result['stdout']) == os.path.realpath(str(tmp_path))
+
+    def test_creates_skips_when_file_exists(self, tmp_path):
+        existing = tmp_path / 'existing.txt'
+        existing.write_text('x')
+        action = make_action('command', {'_raw_params': 'echo run', 'creates': str(existing)})
+        result = action.run(task_vars={})
+        assert result['skipped'] is True
+
+    def test_removes_skips_when_file_absent(self, tmp_path):
+        action = make_action('command', {'_raw_params': 'echo run',
+                                         'removes': str(tmp_path / 'absent.txt')})
+        result = action.run(task_vars={})
+        assert result['skipped'] is True
+
+    def test_stdin_passed_to_command(self):
+        action = make_action('command', {'_raw_params': 'cat', 'stdin': 'hello from stdin'})
+        result = action.run(task_vars={})
+        assert 'hello from stdin' in result['stdout']
+
+    def test_no_command_returns_failed(self):
+        action = make_action('command', {})
+        result = action.run(task_vars={})
+        assert result.get('failed') is True
+
+    def test_result_has_timing_fields(self):
+        action = make_action('command', {'_raw_params': 'true'})
+        result = action.run(task_vars={})
+        assert 'start' in result
+        assert 'end' in result
+        assert 'delta' in result
+
+    def test_strip_empty_ends_default(self):
+        action = make_action('command', {'argv': ['/bin/sh', '-c', 'printf "hello\n\n"']})
+        result = action.run(task_vars={})
+        assert result['stdout'] == 'hello'
+
+    def test_strip_empty_ends_disabled(self):
+        action = make_action('command', {'argv': ['/bin/sh', '-c', 'printf "hello\n\n"'],
+                                          'strip_empty_ends': False})
+        result = action.run(task_vars={})
+        assert result['stdout'].endswith('\n')
+
+    def test_nonexistent_binary_returns_failed(self):
+        action = make_action('command', {'_raw_params': '/nonexistent/binary'})
+        result = action.run(task_vars={})
+        assert result.get('failed') is True
+        assert 'error running command' in result['msg']
+
+
+class TestCommandFallback:
+    def test_delegates_for_non_local(self):
+        action = make_action('command', {'_raw_params': 'echo x'}, local=False)
+        with mock_builtin_run('command', {'rc': 0}) as mock:
+            action.run(task_vars={})
+        mock.assert_called_once()
+
+    def test_delegates_for_become(self):
+        action = make_action('command', {'_raw_params': 'echo x'}, become=True)
+        with mock_builtin_run('command', {'rc': 0}) as mock:
+            action.run(task_vars={})
+        mock.assert_called_once()
+
+    def test_delegates_in_check_mode(self):
+        action = make_action('command', {'_raw_params': 'echo x'}, check_mode=True)
+        with mock_builtin_run('command', {'rc': 0}) as mock:
+            action.run(task_vars={})
+        mock.assert_called_once()
+
+    def test_delegates_for_async(self):
+        action = make_action('command', {'_raw_params': 'echo x'}, async_val=60)
+        with mock_builtin_run('command', {'rc': 0}) as mock:
+            action.run(task_vars={})
+        mock.assert_called_once()
+
+    def test_delegates_with_environment(self):
+        action = make_action('command', {'_raw_params': 'echo x'},
+                             environment=[{'X': '1'}])
+        with mock_builtin_run('command', {'rc': 0}) as mock:
+            action.run(task_vars={})
+        mock.assert_called_once()

@@ -1,0 +1,126 @@
+---
+- name: Integration tests for fast command plugin
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_test_command
+
+  tasks:
+    - name: Create work directory
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    # --- basic command ---
+    - name: Run echo command
+      command:
+        cmd: "echo hello"
+      register: r
+
+    - name: Assert echo output
+      assert:
+        that:
+          - r.stdout == 'hello'
+          - r.changed
+
+    # --- argv form ---
+    - name: Run command via argv
+      command:
+        argv:
+          - echo
+          - hello from argv
+      register: r_argv
+
+    - name: Assert argv output
+      assert:
+        that:
+          - r_argv.stdout == 'hello from argv'
+
+    # --- shell pipe is NOT interpreted ---
+    - name: Run command with pipe character (pipe should not be interpreted)
+      command:
+        cmd: "echo hello | cat"
+      register: r_pipe
+
+    - name: Assert pipe is treated as literal argument, not a shell pipe
+      assert:
+        that:
+          - "'|' in r_pipe.stdout"
+
+    # --- failing command ---
+    - name: Run failing command (ignore errors)
+      command:
+        cmd: "false"
+      register: r_fail
+      ignore_errors: true
+
+    - name: Assert non-zero rc
+      assert:
+        that:
+          - r_fail.failed
+
+    # --- chdir ---
+    - name: Run pwd in work_dir
+      command:
+        cmd: "pwd"
+        chdir: "{{ work_dir }}"
+      register: r_pwd
+
+    - name: Assert chdir works
+      assert:
+        that:
+          - work_dir in r_pwd.stdout
+
+    # --- creates ---
+    - name: Create marker file
+      copy:
+        content: ""
+        dest: "{{ work_dir }}/marker.txt"
+
+    - name: Command with creates - should skip
+      command:
+        cmd: "echo should_not_run"
+        creates: "{{ work_dir }}/marker.txt"
+      register: r_creates
+
+    - name: Assert creates caused skip
+      assert:
+        that:
+          - r_creates.skipped | default(false)
+
+    # --- removes ---
+    - name: Command with removes - should skip because file does not exist
+      command:
+        cmd: "echo should_not_run"
+        removes: "{{ work_dir }}/nonexistent.txt"
+      register: r_removes
+
+    - name: Assert removes caused skip
+      assert:
+        that:
+          - r_removes.skipped | default(false)
+
+    # --- stdin ---
+    - name: Pass stdin to command
+      command:
+        cmd: "cat"
+        stdin: "from stdin"
+      register: r_stdin
+
+    - name: Assert stdin content received
+      assert:
+        that:
+          - "'from stdin' in r_stdin.stdout"
+
+    # --- timing fields ---
+    - name: Assert timing fields present
+      assert:
+        that:
+          - r.start is defined
+          - r.end is defined
+          - r.delta is defined
+
+    - name: Cleanup
+      file:
+        path: "{{ work_dir }}"
+        state: absent

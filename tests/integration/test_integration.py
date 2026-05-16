@@ -36,6 +36,11 @@ def _assert_playbook(result):
 
 
 @pytest.mark.integration
+def test_file():
+    _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_file.yml')))
+
+
+@pytest.mark.integration
 def test_stat():
     _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_stat.yml')))
 
@@ -48,6 +53,11 @@ def test_tempfile():
 @pytest.mark.integration
 def test_copy():
     _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_copy.yml')))
+
+
+@pytest.mark.integration
+def test_command():
+    _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_command.yml')))
 
 
 @pytest.mark.integration
@@ -79,6 +89,16 @@ def test_find_next_helm_release_number():
 @pytest.mark.integration
 def test_helm_repository():
     _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_helm_repository.yml')))
+
+
+@pytest.mark.integration
+def test_k8s_info():
+    _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_k8s_info.yml')))
+
+
+@pytest.mark.integration
+def test_k8s():
+    _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_k8s.yml')))
 
 
 @pytest.mark.integration

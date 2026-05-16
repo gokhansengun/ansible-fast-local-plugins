@@ -1,0 +1,110 @@
+---
+- name: Integration tests for fast k8s_info plugin
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    # ------------------------------------------------------------------ #
+    # List pods in kube-system (always has at least one pod in kind)      #
+    # ------------------------------------------------------------------ #
+    - name: List pods in kube-system
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: kube-system
+        kubeconfig: /kubeconfig/config
+      register: r_pods
+
+    - name: Assert k8s_info returned without error
+      assert:
+        that:
+          - not r_pods.failed | default(false)
+          - not r_pods.changed
+
+    - name: Assert resources is a list
+      assert:
+        that:
+          - r_pods.resources is iterable
+
+    # ------------------------------------------------------------------ #
+    # List namespaces (core v1, no namespace qualifier)                   #
+    # ------------------------------------------------------------------ #
+    - name: List namespaces
+      kubernetes.core.k8s_info:
+        kind: Namespace
+        api_version: v1
+        kubeconfig: /kubeconfig/config
+      register: r_ns
+
+    - name: Assert namespace list returned
+      assert:
+        that:
+          - not r_ns.failed | default(false)
+          - r_ns.resources is iterable
+
+    # ------------------------------------------------------------------ #
+    # Look up a specific namespace by name                                #
+    # ------------------------------------------------------------------ #
+    - name: Get the test-ns namespace by name
+      kubernetes.core.k8s_info:
+        kind: Namespace
+        api_version: v1
+        name: test-ns
+        kubeconfig: /kubeconfig/config
+      register: r_test_ns
+
+    - name: Assert test-ns was found
+      assert:
+        that:
+          - not r_test_ns.failed | default(false)
+          - r_test_ns.resources | length >= 1
+
+    # ------------------------------------------------------------------ #
+    # Non-core API: Deployments (apps/v1)                                 #
+    # ------------------------------------------------------------------ #
+    - name: List deployments in kube-system
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        api_version: apps/v1
+        namespace: kube-system
+        kubeconfig: /kubeconfig/config
+      register: r_deploy
+
+    - name: Assert deployment list returned
+      assert:
+        that:
+          - not r_deploy.failed | default(false)
+          - r_deploy.resources is iterable
+
+    # ------------------------------------------------------------------ #
+    # Label selector                                                       #
+    # ------------------------------------------------------------------ #
+    - name: List pods with label selector
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: kube-system
+        label_selectors:
+          - tier=control-plane
+        kubeconfig: /kubeconfig/config
+      register: r_labeled
+
+    - name: Assert label-selected list returned
+      assert:
+        that:
+          - not r_labeled.failed | default(false)
+          - r_labeled.resources is iterable
+
+    # ------------------------------------------------------------------ #
+    # Missing kind → must fail                                            #
+    # ------------------------------------------------------------------ #
+    - name: Call without kind (expect failure)
+      kubernetes.core.k8s_info:
+        namespace: default
+        kubeconfig: /kubeconfig/config
+      register: r_no_kind
+      ignore_errors: true
+
+    - name: Assert missing kind fails
+      assert:
+        that:
+          - r_no_kind.failed
+          - "'kind' in r_no_kind.msg"
