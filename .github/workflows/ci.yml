@@ -52,6 +52,28 @@ jobs:
           ANSIBLE_CORE_VERSION: ${{ matrix.ansible-core }}
           HASHIVAULT_MODULE_VERSION: ${{ matrix.hashivault-module }}
 
+      - name: Generate coverage summary
+        if: always()
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm \
+            --no-deps \
+            --entrypoint "" \
+            --volume /tmp/test-results:/test-results \
+            controller \
+            sh -c "coverage report --format=markdown > /test-results/coverage-summary.md 2>&1" || true
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+          ANSIBLE_CORE_VERSION: ${{ matrix.ansible-core }}
+          HASHIVAULT_MODULE_VERSION: ${{ matrix.hashivault-module }}
+
+      - name: Add coverage to job summary
+        if: always()
+        run: |
+          if [ -f /tmp/test-results/coverage-summary.md ]; then
+            echo "## Coverage" >> $GITHUB_STEP_SUMMARY
+            cat /tmp/test-results/coverage-summary.md >> $GITHUB_STEP_SUMMARY
+          fi
+
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v7
