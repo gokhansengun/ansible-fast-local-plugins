@@ -31,7 +31,14 @@ RUN pip install --no-cache-dir \
     pytest-mock \
     pytest-cov
 
-RUN ansible-galaxy collection install kubernetes.core
+# Build and install our kubernetes.core collection from source so ansible-galaxy
+# sets up the proper MANIFEST.json and Python namespace structure. This avoids
+# shipping the real kubernetes.core collection (which requires the kubernetes pip
+# package and overrides our kubectl-based action plugins).
+COPY ansible/collections/ansible_collections/kubernetes/core/ /tmp/fast-kube-collection/
+RUN ansible-galaxy collection build /tmp/fast-kube-collection/ --output-path /tmp/ && \
+    ansible-galaxy collection install /tmp/kubernetes-core-1.0.0.tar.gz && \
+    rm -rf /tmp/fast-kube-collection /tmp/kubernetes-core-*.tar.gz
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
