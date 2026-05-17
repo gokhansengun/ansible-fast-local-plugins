@@ -4,6 +4,30 @@ Performance-optimised Ansible action plugins for a controller that provisions en
 
 Each plugin checks whether the connection is local. If it is, the plugin executes in-process: no subprocess, no SSH, no remote Python interpreter. If the connection is anything else, the plugin falls back transparently to the standard Ansible module or action plugin, so behaviour is always correct even when `become`, `check_mode`, or a non-local connection is in use.
 
+## Usage in your project
+
+Copy the `ansible/plugins/action_plugins/` directory into your repo (or point to it from a shared path), then tell Ansible where to find it via `ansible.cfg`:
+
+```ini
+[defaults]
+action_plugins = ./ansible/plugins/action_plugins
+```
+
+The plugins override the built-in modules by the same short name (`stat`, `copy`, `template`, etc.). No other changes to your playbooks or roles are needed — the fast path activates automatically when the connection is `local`, and falls back to standard behaviour otherwise.
+
+If you also use the `kubernetes.core` collection overrides, add the collections path:
+
+```ini
+[defaults]
+action_plugins  = ./ansible/plugins/action_plugins
+collections_paths = ./ansible/collections
+```
+
+> **Note:** `action_plugins` accepts a colon-separated list of directories, so you can append this project's path to an existing value rather than replacing it:
+> ```ini
+> action_plugins = ./my/existing/plugins:./ansible/plugins/action_plugins
+> ```
+
 ## Plugins
 
 | Plugin | Fast-path behaviour | Fallback trigger |
