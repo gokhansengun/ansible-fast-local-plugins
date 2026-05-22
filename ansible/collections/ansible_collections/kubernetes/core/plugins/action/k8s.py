@@ -55,7 +55,9 @@ def _to_manifest_str(definition):
             raise ValueError('definition string is not valid JSON or YAML')
         if not docs or not all(isinstance(d, (dict, list)) for d in docs):
             raise ValueError('definition string is not valid JSON or YAML')
-        return json.dumps(docs[0] if len(docs) == 1 else docs)
+        if len(docs) == 1:
+            return json.dumps(docs[0])
+        return json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': docs})
     raise ValueError(
         'definition must be a dict, list, or JSON string, got %s' % type(definition).__name__
     )

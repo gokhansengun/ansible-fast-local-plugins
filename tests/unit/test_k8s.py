@@ -97,9 +97,9 @@ class TestToManifestStr:
         # separated by ---).  _to_manifest_str must return a JSON list of all 3.
         out = _mod._to_manifest_str(_load_template('rbac_multidoc.yml'))
         parsed = json.loads(out)
-        assert isinstance(parsed, list), 'expected a JSON list for multi-document YAML'
-        assert len(parsed) == 3
-        kinds = [obj['kind'] for obj in parsed]
+        assert parsed['kind'] == 'List', 'expected a k8s List for multi-document YAML'
+        assert len(parsed['items']) == 3
+        kinds = [obj['kind'] for obj in parsed['items']]
         assert kinds == ['ServiceAccount', 'ClusterRole', 'ClusterRoleBinding']
 
     def test_invalid_string_raises(self):
@@ -423,11 +423,11 @@ class TestK8sFastPathPresent:
             result = action.run(task_vars={})
         assert not result.get('failed'), result
         assert result['changed'] is True
-        # All 3 objects must have been sent to kubectl, not just the first.
+        # All 3 objects must have been sent to kubectl as a List, not just the first.
         diff_input = mock_run.call_args_list[0][1]['input']
         manifest = json.loads(diff_input)
-        assert isinstance(manifest, list), 'expected a list sent to kubectl for multi-doc YAML'
-        assert len(manifest) == 3
+        assert manifest['kind'] == 'List', 'expected a k8s List sent to kubectl for multi-doc YAML'
+        assert len(manifest['items']) == 3
 
     def test_definition_as_yaml_string_from_template_lookup(self):
         """definition passed as a YAML string (as returned by lookup('template', ...))."""

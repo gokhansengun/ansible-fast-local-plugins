@@ -279,3 +279,56 @@
         name: "{{ cm_name }}-from-template"
         namespace: "{{ ns }}"
         kubeconfig: "{{ kubeconfig }}"
+
+    # ------------------------------------------------------------------ #
+    # definition as multi-document YAML string (3 objects via template)   #
+    # ------------------------------------------------------------------ #
+    - name: Apply multi-document YAML template (ClusterRole + ClusterRoleBinding + ServiceAccount)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition: "{{ lookup('template', playbook_dir + '/../templates/rbac_multidoc.yml.j2') }}"
+      register: r_multidoc
+
+    - name: Assert multi-document apply succeeded and reported changes
+      assert:
+        that:
+          - not r_multidoc.failed | default(false)
+          - r_multidoc.changed
+
+    - name: Apply same multi-document template again (idempotency)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition: "{{ lookup('template', playbook_dir + '/../templates/rbac_multidoc.yml.j2') }}"
+      register: r_multidoc_idem
+
+    - name: Assert multi-document apply is idempotent
+      assert:
+        that:
+          - not r_multidoc_idem.failed | default(false)
+          - not r_multidoc_idem.changed
+
+    - name: Delete ClusterRole created by multi-document template
+      kubernetes.core.k8s:
+        state: absent
+        kind: ClusterRole
+        api_version: rbac.authorization.k8s.io/v1
+        name: registry-creds
+        kubeconfig: "{{ kubeconfig }}"
+
+    - name: Delete ClusterRoleBinding created by multi-document template
+      kubernetes.core.k8s:
+        state: absent
+        kind: ClusterRoleBinding
+        api_version: rbac.authorization.k8s.io/v1
+        name: registry-creds
+        kubeconfig: "{{ kubeconfig }}"
+
+    - name: Delete ServiceAccount created by multi-document template
+      kubernetes.core.k8s:
+        state: absent
+        kind: ServiceAccount
+        name: registry-creds
+        namespace: kube-system
+        kubeconfig: "{{ kubeconfig }}"
