@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import subprocess
 
+import yaml
+
 from ansible.module_utils._text import to_native
 from ansible.plugins.action import ActionBase
 from ansible.utils.display import Display
@@ -32,10 +34,12 @@ def _resource_type(kind, api_version):
 
 
 def _to_manifest_str(definition):
-    """Convert a dict/list/JSON-string definition to a JSON string.
+    """Convert a dict/list/JSON-string/YAML-string definition to a JSON string.
 
-    Raises ValueError if the input type is unsupported or the string is not
-    valid JSON.
+    Accepts dicts and lists directly, JSON strings, and YAML strings (as
+    produced by lookup('template', ...) or lookup('file', ...)).
+    Raises ValueError if the input cannot be parsed or does not represent a
+    mapping or sequence.
     """
     if isinstance(definition, (dict, list)):
         return json.dumps(definition)
@@ -44,7 +48,14 @@ def _to_manifest_str(definition):
             parsed = json.loads(definition)
             return json.dumps(parsed)
         except json.JSONDecodeError:
-            raise ValueError('definition string is not valid JSON')
+            pass
+        try:
+            parsed = yaml.safe_load(definition)
+        except yaml.YAMLError:
+            raise ValueError('definition string is not valid JSON or YAML')
+        if not isinstance(parsed, (dict, list)):
+            raise ValueError('definition string is not valid JSON or YAML')
+        return json.dumps(parsed)
     raise ValueError(
         'definition must be a dict, list, or JSON string, got %s' % type(definition).__name__
     )

@@ -66,9 +66,29 @@ class TestToManifestStr:
         out = _mod._to_manifest_str(json.dumps(d))
         assert json.loads(out) == d
 
+    def test_yaml_string_input(self):
+        yaml_str = (
+            'apiVersion: rbac.authorization.k8s.io/v1\n'
+            'kind: ClusterRole\n'
+            'metadata:\n'
+            '  name: registry-creds-reader\n'
+            '  namespace: default\n'
+            'rules:\n'
+            '- apiGroups: [""]\n'
+            '  resources: ["secrets"]\n'
+            '  verbs: ["get", "list"]\n'
+        )
+        out = _mod._to_manifest_str(yaml_str)
+        parsed = json.loads(out)
+        assert parsed['apiVersion'] == 'rbac.authorization.k8s.io/v1'
+        assert parsed['kind'] == 'ClusterRole'
+        assert parsed['metadata']['name'] == 'registry-creds-reader'
+        assert parsed['rules'][0]['resources'] == ['secrets']
+
     def test_invalid_string_raises(self):
+        # A plain scalar is valid YAML but not a mapping/sequence — must fail.
         with pytest.raises(ValueError, match='not valid JSON'):
-            _mod._to_manifest_str('not: valid: json: at: all')
+            _mod._to_manifest_str('just plain text')
 
     def test_unsupported_type_raises(self):
         with pytest.raises(ValueError, match='dict, list, or JSON string'):
@@ -359,9 +379,32 @@ class TestK8sFastPathPresent:
         assert 'definition' in result['msg'] or 'kind' in result['msg']
 
     def test_invalid_definition_string_returns_failed(self):
-        action = _action({'definition': 'not: valid: json'})
+        # A plain scalar is valid YAML but not a k8s manifest — must fail.
+        action = _action({'definition': 'just plain text'})
         result = action.run(task_vars={})
         assert result['failed'] is True
+
+    def test_definition_as_yaml_string_from_template_lookup(self):
+        """definition passed as a YAML string (as returned by lookup('template', ...))."""
+        yaml_str = (
+            'apiVersion: rbac.authorization.k8s.io/v1\n'
+            'kind: ClusterRole\n'
+            'metadata:\n'
+            '  name: registry-creds-reader\n'
+            '  namespace: default\n'
+            'rules:\n'
+            '- apiGroups: [""]\n'
+            '  resources: ["secrets"]\n'
+            '  verbs: ["get", "list"]\n'
+        )
+        action = _action({'state': 'present', 'definition': yaml_str})
+        applied = {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'ClusterRole',
+                   'metadata': {'name': 'registry-creds-reader'}}
+        with patch('subprocess.run', side_effect=[_proc(1),
+                                                   _proc(stdout=json.dumps(applied))]):
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is True
 
     def test_apply_failure_returns_failed(self):
         action = _action({'definition': _obj()})

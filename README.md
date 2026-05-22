@@ -20,7 +20,7 @@ If you also use the `kubernetes.core` collection overrides, add the collections 
 ```ini
 [defaults]
 action_plugins  = ./ansible/plugins/action_plugins
-collections_paths = ./ansible/collections
+collections_path = ./ansible/collections
 ```
 
 > **Note:** `action_plugins` accepts a colon-separated list of directories, so you can append this project's path to an existing value rather than replacing it:

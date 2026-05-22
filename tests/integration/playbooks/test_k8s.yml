@@ -238,3 +238,44 @@
         that:
           - not r_deploy_delete.failed | default(false)
           - r_deploy_delete.changed
+
+    # ------------------------------------------------------------------ #
+    # definition as YAML string (simulates lookup('template', ...))       #
+    # ------------------------------------------------------------------ #
+    - name: Create ConfigMap from YAML string definition (lookup template pattern)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition: "{{ lookup('template', playbook_dir + '/../templates/rbac_cm.yml.j2') }}"
+      vars:
+        cm_template_name: "{{ cm_name }}-from-template"
+      register: r_yaml_def
+
+    - name: Assert ConfigMap from YAML string was created
+      assert:
+        that:
+          - not r_yaml_def.failed | default(false)
+          - r_yaml_def.changed
+
+    - name: Apply same YAML string definition again (idempotency)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition: "{{ lookup('template', playbook_dir + '/../templates/rbac_cm.yml.j2') }}"
+      vars:
+        cm_template_name: "{{ cm_name }}-from-template"
+      register: r_yaml_def_idem
+
+    - name: Assert YAML string definition apply is idempotent
+      assert:
+        that:
+          - not r_yaml_def_idem.failed | default(false)
+          - not r_yaml_def_idem.changed
+
+    - name: Delete ConfigMap created from YAML string definition
+      kubernetes.core.k8s:
+        state: absent
+        kind: ConfigMap
+        name: "{{ cm_name }}-from-template"
+        namespace: "{{ ns }}"
+        kubeconfig: "{{ kubeconfig }}"
