@@ -50,12 +50,12 @@ def _to_manifest_str(definition):
         except json.JSONDecodeError:
             pass
         try:
-            parsed = yaml.safe_load(definition)
+            docs = [d for d in yaml.safe_load_all(definition) if d is not None]
         except yaml.YAMLError:
             raise ValueError('definition string is not valid JSON or YAML')
-        if not isinstance(parsed, (dict, list)):
+        if not docs or not all(isinstance(d, (dict, list)) for d in docs):
             raise ValueError('definition string is not valid JSON or YAML')
-        return json.dumps(parsed)
+        return json.dumps(docs[0] if len(docs) == 1 else docs)
     raise ValueError(
         'definition must be a dict, list, or JSON string, got %s' % type(definition).__name__
     )

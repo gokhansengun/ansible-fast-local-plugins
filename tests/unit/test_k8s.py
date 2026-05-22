@@ -12,6 +12,13 @@ sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), '../../ansible/plugins/action_plugins')
 ))
 
+_TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), 'templates')
+
+
+def _load_template(name):
+    with open(os.path.join(_TEMPLATES_DIR, name)) as f:
+        return f.read()
+
 # Load the collection plugin module directly to test module-level helpers.
 _PLUGIN_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', '..',
@@ -84,6 +91,16 @@ class TestToManifestStr:
         assert parsed['kind'] == 'ClusterRole'
         assert parsed['metadata']['name'] == 'registry-creds-reader'
         assert parsed['rules'][0]['resources'] == ['secrets']
+
+    def test_yaml_multidoc_string_input(self):
+        # lookup('template', ...) can return a multi-document YAML (3 objects
+        # separated by ---).  _to_manifest_str must return a JSON list of all 3.
+        out = _mod._to_manifest_str(_load_template('rbac_multidoc.yml'))
+        parsed = json.loads(out)
+        assert isinstance(parsed, list), 'expected a JSON list for multi-document YAML'
+        assert len(parsed) == 3
+        kinds = [obj['kind'] for obj in parsed]
+        assert kinds == ['ServiceAccount', 'ClusterRole', 'ClusterRoleBinding']
 
     def test_invalid_string_raises(self):
         # A plain scalar is valid YAML but not a mapping/sequence — must fail.
@@ -383,6 +400,34 @@ class TestK8sFastPathPresent:
         action = _action({'definition': 'just plain text'})
         result = action.run(task_vars={})
         assert result['failed'] is True
+
+    def test_definition_as_yaml_multidoc_string_from_template_lookup(self):
+        """definition is a multi-document YAML string (3 objects separated by ---).
+
+        lookup('template', 'rbac.yml.j2') can render a file that contains
+        multiple k8s objects in a single stream.  All 3 must reach kubectl,
+        not just the first document.
+        """
+        action = _action({'state': 'present',
+                          'definition': _load_template('rbac_multidoc.yml')})
+        applied = [
+            {'apiVersion': 'v1', 'kind': 'ServiceAccount',
+             'metadata': {'name': 'registry-creds'}},
+            {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'ClusterRole',
+             'metadata': {'name': 'registry-creds-reader'}},
+            {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'ClusterRoleBinding',
+             'metadata': {'name': 'registry-creds-binding'}},
+        ]
+        with patch('subprocess.run', side_effect=[_proc(1),
+                                                   _proc(stdout=json.dumps(applied))]) as mock_run:
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is True
+        # All 3 objects must have been sent to kubectl, not just the first.
+        diff_input = mock_run.call_args_list[0][1]['input']
+        manifest = json.loads(diff_input)
+        assert isinstance(manifest, list), 'expected a list sent to kubectl for multi-doc YAML'
+        assert len(manifest) == 3
 
     def test_definition_as_yaml_string_from_template_lookup(self):
         """definition passed as a YAML string (as returned by lookup('template', ...))."""
