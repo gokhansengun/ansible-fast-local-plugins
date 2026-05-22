@@ -44,6 +44,7 @@ class TestHashivaultReadFastPath:
         assert not result.get('failed'), result
         assert result['value'] == {'username': 'admin', 'password': 's3cr3t'}
         assert result['changed'] is False
+        assert result['rc'] == 0
 
     def test_kv1_key_extraction(self):
         action = make_action('hashivault_read', {
@@ -78,6 +79,7 @@ class TestHashivaultReadFastPath:
             result = action.run(task_vars={})
         assert result['value'] == {'api_key': 'mykey'}
         assert result['metadata'] == {'version': 1}
+        assert result['rc'] == 0
 
     def test_kv2_key_extraction(self):
         action = make_action('hashivault_read', {
@@ -101,6 +103,7 @@ class TestHashivaultReadFastPath:
         with patch('hvac.Client', return_value=MagicMock()):
             result = action.run(task_vars={})
         assert result.get('failed') is True
+        assert result['rc'] == 1
         assert 'secret is required' in result['msg']
 
     def test_invalid_version_returns_failed(self):
@@ -112,6 +115,7 @@ class TestHashivaultReadFastPath:
         })
         result = action.run(task_vars={})
         assert result.get('failed') is True
+        assert result['rc'] == 1
 
     def test_vault_exception_returns_failed(self):
         action = make_action('hashivault_read', {
@@ -124,6 +128,7 @@ class TestHashivaultReadFastPath:
         with patch('hvac.Client', return_value=mock_client):
             result = action.run(task_vars={})
         assert result.get('failed') is True
+        assert result['rc'] == 1
 
     def test_missing_hvac_returns_failed(self):
         action = make_action('hashivault_read', {
@@ -134,6 +139,7 @@ class TestHashivaultReadFastPath:
         with patch.dict('sys.modules', {'hvac': None}):
             result = action.run(task_vars={})
         assert result.get('failed') is True
+        assert result['rc'] == 1
         assert 'hvac' in result['msg']
 
     def test_uses_env_vars_for_url_and_token(self, monkeypatch):

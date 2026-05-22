@@ -21,6 +21,7 @@
           - kv1.value.username == 'admin'
           - kv1.value.password == 's3cr3t'
           - not kv1.changed
+          - kv1.rc == 0
 
     # --- KV v1 key extraction ---
     - name: Read KV v1 specific key
@@ -37,6 +38,7 @@
       assert:
         that:
           - kv1_key.value == 's3cr3t'
+          - kv1_key.rc == 0
 
     # --- KV v2 full secret ---
     - name: Read KV v2 secret
@@ -54,6 +56,7 @@
           - kv2.value.api_key == 'my-api-key-value'
           - kv2.value.db_host == 'postgres.internal'
           - kv2.metadata is defined
+          - kv2.rc == 0
 
     # --- KV v2 key extraction ---
     - name: Read KV v2 specific key
@@ -70,3 +73,4 @@
       assert:
         that:
           - kv2_key.value == 'my-api-key-value'
+          - kv2_key.rc == 0

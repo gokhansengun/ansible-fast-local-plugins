@@ -527,11 +527,59 @@ class TestK8sFastPathAbsent:
             result = action.run(task_vars={})
         assert result['changed'] is False
 
-    def test_missing_kind_returns_failed(self):
+    def test_missing_kind_and_definition_returns_failed(self):
         action = _action({'state': 'absent', 'name': 'my-cm'})
         result = action.run(task_vars={})
         assert result['failed'] is True
-        assert 'kind' in result['msg']
+        assert 'kind' in result['msg'] or 'definition' in result['msg']
+
+    def test_absent_with_single_object_definition(self):
+        action = _action({'state': 'absent', 'definition': _obj('my-cm', 'ConfigMap', 'default')})
+        with patch('subprocess.run', return_value=_proc(stdout='configmap/my-cm\n')):
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is True
+
+    def test_absent_with_single_object_definition_noop_when_not_found(self):
+        action = _action({'state': 'absent', 'definition': _obj('ghost', 'ConfigMap', 'default')})
+        with patch('subprocess.run', return_value=_proc(stdout='')):
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is False
+
+    def test_absent_with_multidoc_definition(self):
+        multidoc = _load_template('rbac_multidoc.yml')
+        # Three sequential delete calls: all return something deleted.
+        action = _action({'state': 'absent', 'definition': multidoc})
+        side = [_proc(stdout='serviceaccount/registry-creds\n'),
+                _proc(stdout='clusterrole/registry-creds-reader\n'),
+                _proc(stdout='clusterrolebinding/registry-creds-binding\n')]
+        with patch('subprocess.run', side_effect=side):
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is True
+
+    def test_absent_with_multidoc_definition_noop_when_all_gone(self):
+        multidoc = _load_template('rbac_multidoc.yml')
+        action = _action({'state': 'absent', 'definition': multidoc})
+        with patch('subprocess.run', return_value=_proc(stdout='')):
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is False
+
+    def test_absent_with_definition_missing_name_returns_failed(self):
+        bad_obj = {'apiVersion': 'v1', 'kind': 'ConfigMap', 'metadata': {}}
+        action = _action({'state': 'absent', 'definition': bad_obj})
+        result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert 'metadata.name' in result['msg']
+
+    def test_absent_with_definition_delete_failure_returns_failed(self):
+        action = _action({'state': 'absent', 'definition': _obj('my-cm', 'ConfigMap', 'default')})
+        with patch('subprocess.run', return_value=_proc(1, stderr='forbidden')):
+            result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert 'forbidden' in result['msg']
 
     def test_delete_failure_returns_failed(self):
         action = _action({'state': 'absent', 'kind': 'ConfigMap', 'name': 'my-cm'})

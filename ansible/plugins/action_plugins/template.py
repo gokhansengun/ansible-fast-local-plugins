@@ -103,8 +103,11 @@ class ActionModule(ActionBase):
 
         # copy_with_new_env is the 2.19-approved way to inject variables and
         # environment overrides into a templar without touching internal state.
+        # searchpath lets Jinja2 resolve {% import %} / {% include %} / {% from %}
+        # relative to the directory that contains the template being rendered.
         data_templar = self._templar.copy_with_new_env(
             available_variables=temp_vars,
+            searchpath=[os.path.dirname(source_path)],
         )
 
         try:

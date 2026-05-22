@@ -63,6 +63,19 @@ def _to_manifest_str(definition):
     )
 
 
+def _objects_from_definition(definition):
+    """Return a flat list of resource dicts from a definition value.
+
+    Handles single objects, Kubernetes List objects, and multi-document YAML
+    (which _to_manifest_str already wraps in a List).
+    Raises ValueError if the definition cannot be parsed.
+    """
+    obj = json.loads(_to_manifest_str(definition))
+    if isinstance(obj, dict) and obj.get('kind') == 'List':
+        return obj.get('items') or []
+    return [obj]
+
+
 def _kubectl_diff(manifest_str, src, kubeconfig, context, binary_path):
     """Run kubectl diff to detect whether applying would change cluster state.
 
@@ -292,24 +305,58 @@ class ActionModule(ActionBase):
         # state: absent                                                        #
         # ------------------------------------------------------------------ #
         if state == 'absent':
-            if not kind:
-                return dict(failed=True, msg='kind is required for state=absent')
-            try:
-                changed = _kubectl_delete(
-                    kind=kind,
-                    api_version=api_version,
-                    name=name,
-                    namespace=namespace,
-                    label_selectors=label_selectors,
-                    field_selectors=field_selectors,
-                    kubeconfig=kubeconfig,
-                    context=context,
-                    binary_path=binary_path,
-                )
-            except RuntimeError as e:
-                return dict(failed=True, msg=to_native(e))
-            result.update(dict(changed=changed, result={}))
-            return result
+            if kind:
+                # Explicit kind/name/namespace — original fast path.
+                try:
+                    changed = _kubectl_delete(
+                        kind=kind,
+                        api_version=api_version,
+                        name=name,
+                        namespace=namespace,
+                        label_selectors=label_selectors,
+                        field_selectors=field_selectors,
+                        kubeconfig=kubeconfig,
+                        context=context,
+                        binary_path=binary_path,
+                    )
+                except RuntimeError as e:
+                    return dict(failed=True, msg=to_native(e))
+                result.update(dict(changed=changed, result={}))
+                return result
+
+            if definition is not None:
+                # Derive what to delete from the definition (mirrors official module).
+                try:
+                    objects = _objects_from_definition(definition)
+                except ValueError as e:
+                    return dict(failed=True, msg=to_native(e))
+                changed = False
+                for obj in objects:
+                    obj_kind = obj.get('kind')
+                    obj_api_version = obj.get('apiVersion', 'v1')
+                    obj_name = (obj.get('metadata') or {}).get('name')
+                    obj_namespace = (obj.get('metadata') or {}).get('namespace')
+                    if not obj_kind or not obj_name:
+                        return dict(failed=True,
+                                    msg='each definition item must have kind and metadata.name')
+                    try:
+                        changed = _kubectl_delete(
+                            kind=obj_kind,
+                            api_version=obj_api_version,
+                            name=obj_name,
+                            namespace=obj_namespace,
+                            label_selectors=[],
+                            field_selectors=[],
+                            kubeconfig=kubeconfig,
+                            context=context,
+                            binary_path=binary_path,
+                        ) or changed
+                    except RuntimeError as e:
+                        return dict(failed=True, msg=to_native(e))
+                result.update(dict(changed=changed, result={}))
+                return result
+
+            return dict(failed=True, msg='one of kind or definition is required for state=absent')
 
         # ------------------------------------------------------------------ #
         # state: present / latest                                             #

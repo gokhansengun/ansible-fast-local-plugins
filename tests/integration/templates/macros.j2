@@ -1,0 +1,7 @@
+{% macro greet(name) -%}
+Hello, {{ name }}!
+{%- endmacro %}
+
+{% macro shout(text) -%}
+{{ text | upper }}
+{%- endmacro %}

@@ -332,3 +332,38 @@
         name: registry-creds
         namespace: kube-system
         kubeconfig: "{{ kubeconfig }}"
+
+    # ------------------------------------------------------------------ #
+    # state: absent with definition from template (all 3 objects at once) #
+    # ------------------------------------------------------------------ #
+    - name: Re-create resources via multi-document template (pre-condition for absent test)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition: "{{ lookup('template', playbook_dir + '/../templates/rbac_multidoc.yml.j2') }}"
+
+    - name: Delete all 3 resources using state=absent with the same template definition
+      kubernetes.core.k8s:
+        state: absent
+        kubeconfig: "{{ kubeconfig }}"
+        definition: "{{ lookup('template', playbook_dir + '/../templates/rbac_multidoc.yml.j2') }}"
+      register: r_absent_def
+
+    - name: Assert state=absent with definition deleted the resources
+      assert:
+        that:
+          - not r_absent_def.failed | default(false)
+          - r_absent_def.changed
+
+    - name: Apply state=absent with same definition again (idempotency)
+      kubernetes.core.k8s:
+        state: absent
+        kubeconfig: "{{ kubeconfig }}"
+        definition: "{{ lookup('template', playbook_dir + '/../templates/rbac_multidoc.yml.j2') }}"
+      register: r_absent_def_idem
+
+    - name: Assert state=absent with definition is idempotent
+      assert:
+        that:
+          - not r_absent_def_idem.failed | default(false)
+          - not r_absent_def_idem.changed

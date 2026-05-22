@@ -77,6 +77,30 @@ class TestTemplateFastPath:
         result = action.run(task_vars={})
         assert result.get('failed') is True
 
+    def test_jinja2_import_macros(self, tmp_path):
+        (tmp_path / 'macros.j2').write_text(
+            "{% macro greet(name) %}Hello, {{ name }}!{% endmacro %}"
+        )
+        action, dest = _make_template_action(
+            tmp_path,
+            "{% import 'macros.j2' as m %}{{ m.greet(who) }}",
+        )
+        result = action.run(task_vars={'who': 'Ansible'})
+        assert not result.get('failed'), result
+        assert open(dest).read() == 'Hello, Ansible!'
+
+    def test_jinja2_from_import(self, tmp_path):
+        (tmp_path / 'macros.j2').write_text(
+            "{% macro upper(s) %}{{ s | upper }}{% endmacro %}"
+        )
+        action, dest = _make_template_action(
+            tmp_path,
+            "{% from 'macros.j2' import upper %}{{ upper(word) }}",
+        )
+        result = action.run(task_vars={'word': 'ansible'})
+        assert not result.get('failed'), result
+        assert open(dest).read() == 'ANSIBLE'
+
 
 class TestTemplateFallback:
     def test_delegates_for_non_local(self, tmp_path):

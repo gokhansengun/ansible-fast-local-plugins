@@ -50,7 +50,7 @@ class ActionModule(ActionBase):
         try:
             import hvac
         except ImportError:
-            return dict(failed=True, msg='hvac Python library is required')
+            return dict(failed=True, rc=1, msg='hvac Python library is required')
 
         url = args.get('url') or os.environ.get('VAULT_ADDR', 'https://127.0.0.1:8200')
         token = args.get('token') or os.environ.get('VAULT_TOKEN')
@@ -60,12 +60,12 @@ class ActionModule(ActionBase):
         try:
             version = int(args.get('version', 1))
         except (TypeError, ValueError):
-            return dict(failed=True, msg='version must be an integer')
+            return dict(failed=True, rc=1, msg='version must be an integer')
         validate_certs = args.get('validate_certs', True)
         ca_cert = args.get('ca_cert')
 
         if not secret:
-            return dict(failed=True, msg='secret is required')
+            return dict(failed=True, rc=1, msg='secret is required')
 
         try:
             client = hvac.Client(
@@ -94,7 +94,7 @@ class ActionModule(ActionBase):
                 metadata = {}
 
         except Exception as e:
-            return dict(failed=True, msg='vault read failed: %s' % to_native(e))
+            return dict(failed=True, rc=1, msg='vault read failed: %s' % to_native(e))
 
         if key:
             if key not in value:
@@ -103,6 +103,7 @@ class ActionModule(ActionBase):
 
         result.update(dict(
             changed=False,
+            rc=0,
             value=value,
             raw=raw,
             data=data,

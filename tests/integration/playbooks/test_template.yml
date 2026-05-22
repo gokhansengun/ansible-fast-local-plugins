@@ -77,6 +77,58 @@
         that:
           - s_mode.stat.mode == '0600'
 
+    # --- jinja2 {% import %} ---
+    - name: Render template using import
+      template:
+        src: "{{ playbook_dir }}/../templates/macro_user.j2"
+        dest: "{{ work_dir }}/macro_user.txt"
+      vars:
+        recipient: "Alice"
+        label: "imported"
+      register: r_import
+
+    - name: Assert macro_user rendered and changed
+      assert:
+        that:
+          - r_import.changed
+
+    - name: Read macro_user output
+      shell:
+        cmd: "cat {{ work_dir }}/macro_user.txt"
+      register: cat_import
+
+    - name: Assert macro_user content
+      assert:
+        that:
+          - "'Hello, Alice!' in cat_import.stdout"
+          - "'IMPORTED' in cat_import.stdout"
+
+    # --- jinja2 {% from ... import %} ---
+    - name: Render template using from-import
+      template:
+        src: "{{ playbook_dir }}/../templates/from_import_user.j2"
+        dest: "{{ work_dir }}/from_import_user.txt"
+      vars:
+        recipient: "Bob"
+        label: "from-imported"
+      register: r_from
+
+    - name: Assert from_import_user rendered and changed
+      assert:
+        that:
+          - r_from.changed
+
+    - name: Read from_import_user output
+      shell:
+        cmd: "cat {{ work_dir }}/from_import_user.txt"
+      register: cat_from
+
+    - name: Assert from_import_user content
+      assert:
+        that:
+          - "'Hello, Bob!' in cat_from.stdout"
+          - "'FROM-IMPORTED' in cat_from.stdout"
+
     - name: Cleanup
       file:
         path: "{{ work_dir }}"
