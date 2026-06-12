@@ -9,7 +9,13 @@ sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), '../../ansible/plugins/action_plugins')
 ))
 
-from tests.conftest import COLLECTION_PLUGIN_DIRS, make_action, mock_collection_run
+from tests.conftest import (
+    COLLECTION_PLUGIN_DIRS,
+    _load_plugin,
+    make_action,
+    mock_collection_run,
+    shadow_collection_import,
+)
 
 PLUGIN_DIR = COLLECTION_PLUGIN_DIRS['kubernetes.core']
 FQCN = 'kubernetes.core.plugins.action.helm_repository'
@@ -129,3 +135,40 @@ class TestHelmRepositoryFallback:
         with mock_collection_run(FQCN, {'changed': False, 'rc': 0}) as mock:
             action.run(task_vars={})
         mock.assert_called_once()
+
+
+# ------------------------------------------------------------------ #
+# Fallback self-recursion (regression for 'maximum recursion depth     #
+# exceeded')                                                            #
+# ------------------------------------------------------------------ #
+class TestHelmRepositoryFallbackRecursion:
+    """When this collection shadows kubernetes.core (the deployed layout),
+    the fallback import resolves to this very plugin; delegating used to
+    recurse until 'maximum recursion depth exceeded'. become on a local
+    connection must use the fast path; non-local connections must fail
+    with an actionable message.
+    """
+
+    def _shadow(self):
+        return shadow_collection_import(
+            FQCN, _load_plugin('helm_repository', plugin_dir=PLUGIN_DIR))
+
+    def test_become_uses_fast_path_when_self_shadowed(self, tmp_path):
+        fake_helm = tmp_path / 'helm'
+        fake_helm.write_text('#!/bin/sh\nexit 0\n')
+        fake_helm.chmod(0o755)
+        action = _action({'name': 'myrepo', 'repo_url': 'https://example.com/charts',
+                          'binary_path': str(fake_helm)}, become=True)
+        with self._shadow():
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is True
+        assert result['repo_name'] == 'myrepo'
+
+    def test_non_local_fails_cleanly_when_self_shadowed(self):
+        action = _action({'name': 'myrepo', 'repo_url': 'https://example.com/charts'},
+                         local=False)
+        with self._shadow():
+            result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert 'local connection' in result['msg']

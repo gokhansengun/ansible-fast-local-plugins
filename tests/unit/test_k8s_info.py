@@ -23,7 +23,12 @@ _spec = importlib.util.spec_from_file_location('_aflp_k8s_info', _PLUGIN_PATH)
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
-from tests.conftest import COLLECTION_PLUGIN_DIRS, make_action, mock_collection_run
+from tests.conftest import (
+    COLLECTION_PLUGIN_DIRS,
+    make_action,
+    mock_collection_run,
+    shadow_collection_import,
+)
 
 PLUGIN_DIR = COLLECTION_PLUGIN_DIRS['kubernetes.core']
 FQCN = 'kubernetes.core.plugins.action.k8s_info'
@@ -203,6 +208,45 @@ class TestK8sInfoFastPath:
         assert not result.get('failed')
         cmd = mock_run.call_args[0][0]
         assert 'specific-pod' in cmd
+
+
+# ------------------------------------------------------------------ #
+# Fallback self-recursion (regression for 'maximum recursion depth     #
+# exceeded')                                                            #
+# ------------------------------------------------------------------ #
+class TestK8sInfoFallbackRecursion:
+    """Regression tests for 'Task failed: maximum recursion depth exceeded'.
+
+    Seen in production looping k8s_info over the nodes of a >40-node cluster
+    on localhost under a become-enabled play: the fallback gate fired, the
+    fallback import resolved to this same plugin (the collection shadows
+    kubernetes.core), and run() delegated to itself until Python's recursion
+    limit. When self-shadowed, become on a local connection must use the
+    fast path and non-local connections must fail with an actionable
+    message — neither may delegate.
+    """
+
+    def test_become_uses_fast_path_when_self_shadowed(self):
+        obj = {'kind': 'Node', 'metadata': {'name': 'phantom-ce-01-w30'}}
+        action = _action(
+            {'kind': 'Node', 'api_version': 'v1', 'name': 'phantom-ce-01-w30'},
+            become=True,
+        )
+        with shadow_collection_import(FQCN, _mod):
+            with patch('subprocess.run', return_value=_kubectl_single(obj)):
+                result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['resources'][0]['metadata']['name'] == 'phantom-ce-01-w30'
+
+    def test_non_local_fails_cleanly_when_self_shadowed(self):
+        action = _action(
+            {'kind': 'Node', 'api_version': 'v1', 'name': 'phantom-ce-01-w30'},
+            local=False,
+        )
+        with shadow_collection_import(FQCN, _mod):
+            result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert 'local connection' in result['msg']
 
 
 # ------------------------------------------------------------------ #

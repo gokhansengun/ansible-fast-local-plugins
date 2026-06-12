@@ -97,6 +97,24 @@ def test_k8s_info():
 
 
 @pytest.mark.integration
+def test_k8s_info_fallback_no_recursion():
+    """Replicates 'Task failed: maximum recursion depth exceeded'.
+
+    The fallback gate in the overriding kubernetes.core.k8s_info action plugin
+    imports its own module (the collection shadows kubernetes.core), so any
+    become/non-local task delegates to itself until the recursion limit.
+    """
+    result = _run(os.path.join(PLAYBOOK_DIR, 'test_k8s_info_fallback_recursion.yml'))
+    output = result.stdout + result.stderr
+    assert 'maximum recursion depth exceeded' not in output, (
+        f'k8s_info fallback delegated to itself\n'
+        f'--- stdout ---\n{result.stdout}\n'
+        f'--- stderr ---\n{result.stderr}'
+    )
+    _assert_playbook(result)
+
+
+@pytest.mark.integration
 def test_k8s():
     _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_k8s.yml')))
 

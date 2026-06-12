@@ -29,7 +29,12 @@ _spec = importlib.util.spec_from_file_location('_aflp_k8s', _PLUGIN_PATH)
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
-from tests.conftest import COLLECTION_PLUGIN_DIRS, make_action, mock_collection_run
+from tests.conftest import (
+    COLLECTION_PLUGIN_DIRS,
+    make_action,
+    mock_collection_run,
+    shadow_collection_import,
+)
 
 PLUGIN_DIR = COLLECTION_PLUGIN_DIRS['kubernetes.core']
 FQCN = 'kubernetes.core.plugins.action.k8s'
@@ -703,3 +708,46 @@ class TestK8sFallback:
         with mock_collection_run(FQCN, {'changed': True, 'result': {}}) as mock:
             action.run(task_vars={})
         mock.assert_called_once()
+
+
+# ------------------------------------------------------------------ #
+# Fallback self-recursion (regression for 'maximum recursion depth     #
+# exceeded')                                                            #
+# ------------------------------------------------------------------ #
+class TestK8sFallbackRecursion:
+    """When this collection shadows kubernetes.core (the deployed layout),
+    the fallback import resolves to this very plugin; delegating used to
+    recurse until 'maximum recursion depth exceeded'. become on a local
+    connection must use the fast path; everything that genuinely needs the
+    standard plugin must fail with an actionable message.
+    """
+
+    def test_become_uses_fast_path_when_self_shadowed(self):
+        action = _action({'definition': _obj()}, become=True)
+        with shadow_collection_import(FQCN, _mod):
+            with patch('subprocess.run',
+                       side_effect=[_proc(1), _proc(stdout=json.dumps(_obj()))]):
+                result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is True
+
+    def test_non_local_fails_cleanly_when_self_shadowed(self):
+        action = _action({'definition': _obj()}, local=False)
+        with shadow_collection_import(FQCN, _mod):
+            result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert 'local connection' in result['msg']
+
+    def test_wait_fails_cleanly_when_self_shadowed(self):
+        action = _action({'definition': _obj(), 'wait': True})
+        with shadow_collection_import(FQCN, _mod):
+            result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert 'wait' in result['msg']
+
+    def test_apply_false_fails_cleanly_when_self_shadowed(self):
+        action = _action({'definition': _obj(), 'apply': False})
+        with shadow_collection_import(FQCN, _mod):
+            result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert 'apply=false' in result['msg']

@@ -157,6 +157,28 @@ def mock_collection_run(fqcn: str, return_value):
         yield mock_instance.run
 
 
+@contextlib.contextmanager
+def shadow_collection_import(fqcn: str, module):
+    """Install ``module`` under its deployed collection import path.
+
+    Simulates the real layout, where this repo's collection IS
+    ansible_collections.kubernetes.core (collections_path points at it and the
+    genuine collection is absent — see docker/Dockerfile): a plugin's lazy
+    fallback import then resolves to the plugin module itself instead of the
+    genuine collection plugin that mock_collection_run substitutes.
+    """
+    full_module = 'ansible_collections.' + fqcn
+    parts = full_module.split('.')
+    patch_dict = {}
+    for i in range(2, len(parts)):  # skip 'ansible_collections' itself
+        key = '.'.join(parts[:i])
+        if key not in sys.modules:
+            patch_dict[key] = MagicMock()
+    patch_dict[full_module] = module
+    with patch.dict(sys.modules, patch_dict):
+        yield
+
+
 @pytest.fixture
 def local_conn():
     return _local_conn()

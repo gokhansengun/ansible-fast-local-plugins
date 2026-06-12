@@ -22,8 +22,26 @@ def _is_local(connection):
     return False
 
 
+def _load_standard_action():
+    """Import the genuine kubernetes.core helm_repository action plugin class.
+
+    Returns None when the import resolves back to this override: this
+    collection is typically installed *as* kubernetes.core (shadowing the
+    genuine collection, which need not be installed at all), so delegating
+    would mean the plugin instantiating itself until the interpreter
+    recursion limit ('maximum recursion depth exceeded').
+    """
+    from ansible_collections.kubernetes.core.plugins.action.helm_repository import ActionModule as _Standard
+    if getattr(_Standard, '_FAST_LOCAL_OVERRIDE', None) is True:
+        return None
+    return _Standard
+
+
 class ActionModule(ActionBase):
     TRANSFERS_FILES = False
+    # Marks this class (and any separately-loaded copy of this file) as the
+    # fast override so _load_standard_action can detect self-shadowing.
+    _FAST_LOCAL_OVERRIDE = True
 
     def run(self, tmp=None, task_vars=None):
         if task_vars is None:
@@ -47,12 +65,26 @@ class ActionModule(ActionBase):
 
         if not _is_local(conn) or self._play_context.become:
             display.debug('fast_helm_repository: non-local or become, delegating to collection plugin')
-            from ansible_collections.kubernetes.core.plugins.action.helm_repository import ActionModule as _Standard
-            std = _Standard(
-                self._task, conn, self._play_context,
-                self._loader, self._templar, self._shared_loader_obj,
+            _Standard = _load_standard_action()
+            if _Standard is not None:
+                std = _Standard(
+                    self._task, conn, self._play_context,
+                    self._loader, self._templar, self._shared_loader_obj,
+                )
+                return std.run(task_vars=task_vars)
+            if not _is_local(conn):
+                return dict(failed=True, msg=(
+                    'kubernetes.core.helm_repository is provided by the fast local '
+                    'override, which only supports local connections, and no genuine '
+                    'kubernetes.core collection is installed to fall back to. '
+                    'Run the task on the controller (e.g. delegate_to: localhost) '
+                    'or install the genuine collection ahead of this override.'
+                ))
+            display.warning(
+                'fast_helm_repository: become cannot be honoured because no genuine '
+                'kubernetes.core collection is installed; running helm as the '
+                'connecting user instead of the become user'
             )
-            return std.run(task_vars=task_vars)
 
         display.debug('fast_helm_repository: local connection, calling helm directly')
 

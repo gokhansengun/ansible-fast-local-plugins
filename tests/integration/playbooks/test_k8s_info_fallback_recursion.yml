@@ -1,0 +1,54 @@
+---
+# Replicates: "Task failed: maximum recursion depth exceeded".
+#
+# A k8s_info task that trips the fallback gate (become: true, or a non-local
+# connection) makes the plugin import
+# ansible_collections.kubernetes.core.plugins.action.k8s_info — which is this
+# very plugin, because the collection is installed AS kubernetes.core and the
+# genuine collection is deliberately absent (see docker/Dockerfile). The
+# plugin then delegates to itself until Python's recursion limit.
+#
+# Seen in production on localhost while looping kind=Node lookups over the
+# node names of a >40-node cluster under a become-enabled play.
+- name: k8s_info fallback gate must not recurse into itself
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    - name: Discover node names (fast path, no become)
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        kubeconfig: /kubeconfig/config
+      register: r_nodes
+
+    - name: Collect node names
+      set_fact:
+        node_names: "{{ r_nodes.resources | map(attribute='metadata.name') | list }}"
+
+    - name: Assert the kind cluster has at least one node
+      assert:
+        that:
+          - node_names | length >= 1
+
+    - name: Check whether this node is actually registered
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        name: "{{ node_name }}"
+        kubeconfig: /kubeconfig/config
+      become: true
+      with_items:
+        - "{{ node_names }}"
+      loop_control:
+        loop_var: node_name
+      register: node_query_result
+
+    - name: Assert every node lookup returned exactly one resource
+      assert:
+        that:
+          - not item.failed | default(false)
+          - item.resources | length == 1
+      with_items: "{{ node_query_result.results }}"
+      loop_control:
+        label: "{{ item.node_name }}"

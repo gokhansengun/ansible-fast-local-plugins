@@ -25,6 +25,21 @@ def _is_local(connection):
     return False
 
 
+def _load_standard_action():
+    """Import the genuine kubernetes.core k8s action plugin class.
+
+    Returns None when the import resolves back to this override: this
+    collection is typically installed *as* kubernetes.core (shadowing the
+    genuine collection, which need not be installed at all), so delegating
+    would mean the plugin instantiating itself until the interpreter
+    recursion limit ('maximum recursion depth exceeded').
+    """
+    from ansible_collections.kubernetes.core.plugins.action.k8s import ActionModule as _Standard
+    if getattr(_Standard, '_FAST_LOCAL_OVERRIDE', None) is True:
+        return None
+    return _Standard
+
+
 def _resource_type(kind, api_version):
     """Return the kubectl resource type string (e.g. 'deployment.apps' for apps/v1)."""
     if '/' in api_version:
@@ -228,6 +243,16 @@ def _kubectl_patch(kind, api_version, name, namespace, patch_data, merge_type,
 
 class ActionModule(ActionBase):
     TRANSFERS_FILES = False
+    # Marks this class (and any separately-loaded copy of this file) as the
+    # fast override so _load_standard_action can detect self-shadowing.
+    _FAST_LOCAL_OVERRIDE = True
+
+    def _delegate(self, task_vars, standard_cls):
+        std = standard_cls(
+            self._task, self._connection, self._play_context,
+            self._loader, self._templar, self._shared_loader_obj,
+        )
+        return std.run(task_vars=task_vars)
 
     def run(self, tmp=None, task_vars=None):
         if task_vars is None:
@@ -251,32 +276,46 @@ class ActionModule(ActionBase):
 
         if not _is_local(conn) or self._play_context.become:
             display.debug('fast_k8s: non-local or become, delegating to collection plugin')
-            from ansible_collections.kubernetes.core.plugins.action.k8s import ActionModule as _Standard
-            std = _Standard(
-                self._task, conn, self._play_context,
-                self._loader, self._templar, self._shared_loader_obj,
+            _Standard = _load_standard_action()
+            if _Standard is not None:
+                return self._delegate(task_vars, _Standard)
+            if not _is_local(conn):
+                return dict(failed=True, msg=(
+                    'kubernetes.core.k8s is provided by the fast local override, '
+                    'which only supports local connections, and no genuine '
+                    'kubernetes.core collection is installed to fall back to. '
+                    'Run the task on the controller (e.g. delegate_to: localhost) '
+                    'or install the genuine collection ahead of this override.'
+                ))
+            display.warning(
+                'fast_k8s: become cannot be honoured because no genuine '
+                'kubernetes.core collection is installed; continuing with the '
+                'local kubectl fast path (become has no effect on API calls)'
             )
-            return std.run(task_vars=task_vars)
 
         # wait/template require complex logic not worth reimplementing; delegate.
         if args.get('wait') or args.get('wait_condition') or args.get('template'):
             display.debug('fast_k8s: wait/template set, delegating to collection plugin')
-            from ansible_collections.kubernetes.core.plugins.action.k8s import ActionModule as _Standard
-            std = _Standard(
-                self._task, conn, self._play_context,
-                self._loader, self._templar, self._shared_loader_obj,
-            )
-            return std.run(task_vars=task_vars)
+            _Standard = _load_standard_action()
+            if _Standard is None:
+                return dict(failed=True, msg=(
+                    'kubernetes.core.k8s: wait/wait_condition/template are not '
+                    'supported by the fast local override and no genuine '
+                    'kubernetes.core collection is installed to fall back to'
+                ))
+            return self._delegate(task_vars, _Standard)
 
         # apply=false means create/replace semantics which differ significantly; delegate.
         if args.get('apply') is False:
             display.debug('fast_k8s: apply=false, delegating to collection plugin')
-            from ansible_collections.kubernetes.core.plugins.action.k8s import ActionModule as _Standard
-            std = _Standard(
-                self._task, conn, self._play_context,
-                self._loader, self._templar, self._shared_loader_obj,
-            )
-            return std.run(task_vars=task_vars)
+            _Standard = _load_standard_action()
+            if _Standard is None:
+                return dict(failed=True, msg=(
+                    'kubernetes.core.k8s: apply=false is not supported by the '
+                    'fast local override and no genuine kubernetes.core '
+                    'collection is installed to fall back to'
+                ))
+            return self._delegate(task_vars, _Standard)
 
         display.debug('fast_k8s: local connection, calling kubectl directly')
 
