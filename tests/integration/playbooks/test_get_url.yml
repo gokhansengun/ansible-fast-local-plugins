@@ -1,0 +1,118 @@
+---
+# Integration tests for the fast get_url plugin. Uses a file:// source so the
+# test is self-contained (no HTTP service needed); the real HTTP transport
+# shares open_url with the uri plugin, which is exercised in test_uri.yml.
+- name: Integration tests for fast get_url plugin
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_test_get_url
+
+  tasks:
+    - name: Reset work directory
+      file:
+        path: "{{ work_dir }}"
+        state: absent
+
+    - name: Create work directory
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    - name: Create a source file to "download"
+      copy:
+        content: "downloaded-content"
+        dest: "{{ work_dir }}/source"
+
+    # --- basic download ---
+    - name: Download via file:// to a new dest
+      get_url:
+        url: "file://{{ work_dir }}/source"
+        dest: "{{ work_dir }}/dest"
+      register: r_get
+
+    - name: Read downloaded file
+      slurp:
+        src: "{{ work_dir }}/dest"
+      register: got
+
+    - name: Assert downloaded via the fast plugin
+      assert:
+        that:
+          - r_get.changed
+          - r_get.checksum_src is defined
+          - (got.content | b64decode) == 'downloaded-content'
+          - r_get['__produced_by_fast_plugin'] | default(false)
+
+    # --- idempotency: identical content is not re-written ---
+    - name: Download the same content again
+      get_url:
+        url: "file://{{ work_dir }}/source"
+        dest: "{{ work_dir }}/dest"
+      register: r_get2
+
+    - name: Assert idempotent
+      assert:
+        that:
+          - not r_get2.changed
+          - r_get2['__produced_by_fast_plugin'] | default(false)
+
+    # --- checksum match skips the download ---
+    - name: Compute the source sha256
+      stat:
+        path: "{{ work_dir }}/source"
+        checksum_algorithm: sha256
+      register: src_stat
+
+    - name: Download with a matching checksum
+      get_url:
+        url: "file://{{ work_dir }}/source"
+        dest: "{{ work_dir }}/dest"
+        checksum: "sha256:{{ src_stat.stat.checksum }}"
+      register: r_cksum
+
+    - name: Assert checksum match is unchanged
+      assert:
+        that:
+          - not r_cksum.changed
+          - r_cksum.msg == 'file already exists'
+
+    # --- wrong checksum fails ---
+    - name: Download with a wrong checksum
+      get_url:
+        url: "file://{{ work_dir }}/source"
+        dest: "{{ work_dir }}/dest2"
+        checksum: "sha256:{{ '0' * 64 }}"
+      register: r_badcksum
+      ignore_errors: true
+
+    - name: Assert wrong checksum fails and writes nothing
+      assert:
+        that:
+          - r_badcksum.failed
+          - "'did not match' in r_badcksum.msg"
+          - "'__produced_by_fast_plugin' not in r_badcksum"
+
+    # --- mode is honoured on a fresh download ---
+    - name: Download with a mode
+      get_url:
+        url: "file://{{ work_dir }}/source"
+        dest: "{{ work_dir }}/dest_mode"
+        mode: "0600"
+      register: r_mode
+
+    - name: Stat the mode-set file
+      stat:
+        path: "{{ work_dir }}/dest_mode"
+      register: mode_stat
+
+    - name: Assert mode applied
+      assert:
+        that:
+          - r_mode.changed
+          - mode_stat.stat.mode == '0600'
+
+    - name: Cleanup
+      file:
+        path: "{{ work_dir }}"
+        state: absent

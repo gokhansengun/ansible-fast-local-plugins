@@ -1,0 +1,53 @@
+---
+- name: Integration tests for fast slurp plugin
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_test_slurp
+
+  tasks:
+    - name: Reset work directory
+      file:
+        path: "{{ work_dir }}"
+        state: absent
+
+    - name: Create work directory
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    - name: Write a file with binary-ish content
+      copy:
+        content: "line1\nline2\n"
+        dest: "{{ work_dir }}/data.txt"
+
+    - name: Slurp the file
+      slurp:
+        src: "{{ work_dir }}/data.txt"
+      register: s
+
+    - name: Assert slurp decoded correctly and ran via the fast plugin
+      assert:
+        that:
+          - s.encoding == 'base64'
+          - s.source == work_dir ~ '/data.txt'
+          - (s.content | b64decode) == 'line1\nline2\n'
+          - s['__produced_by_fast_plugin'] | default(false)
+
+    - name: Slurp a missing file (should fail)
+      slurp:
+        src: "{{ work_dir }}/missing.txt"
+      register: s_missing
+      ignore_errors: true
+
+    - name: Assert missing file failed and is unmarked
+      assert:
+        that:
+          - s_missing.failed
+          - "'File not found' in s_missing.msg"
+          - "'__produced_by_fast_plugin' not in s_missing"
+
+    - name: Cleanup
+      file:
+        path: "{{ work_dir }}"
+        state: absent

@@ -1,0 +1,98 @@
+---
+- name: Integration tests for fast fetch plugin
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_test_fetch
+
+  tasks:
+    - name: Reset work directory
+      file:
+        path: "{{ work_dir }}"
+        state: absent
+
+    - name: Create work directory
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    - name: Create a source file
+      copy:
+        content: "fetch me\n"
+        dest: "{{ work_dir }}/src.txt"
+
+    # --- flat fetch to an explicit destination file ---
+    - name: Fetch flat to a file
+      fetch:
+        src: "{{ work_dir }}/src.txt"
+        dest: "{{ work_dir }}/out.txt"
+        flat: true
+      register: r_fetch
+
+    - name: Read fetched file
+      slurp:
+        src: "{{ work_dir }}/out.txt"
+      register: fetched
+
+    - name: Assert fetch copied content via the fast plugin
+      assert:
+        that:
+          - r_fetch.changed
+          - r_fetch.dest == work_dir ~ '/out.txt'
+          - r_fetch.checksum is defined
+          - r_fetch.remote_checksum == r_fetch.checksum
+          - (fetched.content | b64decode) == 'fetch me\n'
+          - r_fetch['__produced_by_fast_plugin'] | default(false)
+
+    # --- idempotency ---
+    - name: Fetch the same file again
+      fetch:
+        src: "{{ work_dir }}/src.txt"
+        dest: "{{ work_dir }}/out.txt"
+        flat: true
+      register: r_fetch2
+
+    - name: Assert second fetch is unchanged
+      assert:
+        that:
+          - not r_fetch2.changed
+          - r_fetch2['__produced_by_fast_plugin'] | default(false)
+
+    # --- flat fetch into a directory (trailing slash uses basename) ---
+    - name: Make a target directory
+      file:
+        path: "{{ work_dir }}/into"
+        state: directory
+
+    - name: Fetch flat into a directory
+      fetch:
+        src: "{{ work_dir }}/src.txt"
+        dest: "{{ work_dir }}/into/"
+        flat: true
+      register: r_dir
+
+    - name: Assert dest resolved to dir + basename
+      assert:
+        that:
+          - r_dir.changed
+          - r_dir.dest == work_dir ~ '/into/src.txt'
+
+    # --- missing source, fail_on_missing=false is ignored ---
+    - name: Fetch a missing source, ignored
+      fetch:
+        src: "{{ work_dir }}/nope.txt"
+        dest: "{{ work_dir }}/never.txt"
+        flat: true
+        fail_on_missing: false
+      register: r_missing
+
+    - name: Assert missing source ignored without failing
+      assert:
+        that:
+          - not r_missing.changed
+          - not r_missing.failed | default(false)
+
+    - name: Cleanup
+      file:
+        path: "{{ work_dir }}"
+        state: absent

@@ -81,6 +81,21 @@ def test_uri():
 
 
 @pytest.mark.integration
+def test_slurp():
+    _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_slurp.yml')))
+
+
+@pytest.mark.integration
+def test_fetch():
+    _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_fetch.yml')))
+
+
+@pytest.mark.integration
+def test_get_url():
+    _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_get_url.yml')))
+
+
+@pytest.mark.integration
 def test_builtin_fqcn_redirect():
     """ansible.builtin.<name> must route to the fast local action plugins.
 

@@ -61,6 +61,9 @@ Every successful fast (in-process) result carries the key `__produced_by_fast_pl
 | `template` | Jinja2 rendering via `ansible.template.Templar` | non-local, `become`, unsupported args |
 | `lineinfile` | in-process regexp/line edit + atomic write | non-local, `become`, check-mode, file-attr args (`mode`/`owner`/…), `validate` |
 | `uri` | HTTP request via `ansible.module_utils.urls.open_url` | non-local, `become`, async, check-mode, `dest`/`src`, `form-multipart`, unsupported args |
+| `slurp` | `base64`-encode a file read in-process | non-local, `become` |
+| `fetch` | read source + atomic local write (no slurp/stat fork) | non-local, `become`, check-mode |
+| `get_url` | download via `open_url` + checksum-based atomic write | non-local, `become`, async, check-mode, dir `dest`, checksum-URL, file-attr args |
 | `command` | `subprocess.run` (no shell) | non-local, `become`, async, `environment` vars, check-mode |
 | `shell` | `subprocess.run` (no Ansible module overhead) | non-local, `become`, async, `environment` vars, check-mode |
 | `hashivault_read` | `hvac.Client` in-process | non-local |
@@ -171,6 +174,9 @@ ansible/
       template.py
       lineinfile.py
       uri.py
+      slurp.py
+      fetch.py
+      get_url.py
       command.py
       shell.py
       hashivault_read.py
