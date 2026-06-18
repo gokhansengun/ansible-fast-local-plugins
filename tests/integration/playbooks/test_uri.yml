@@ -1,0 +1,91 @@
+---
+# Integration tests for the fast uri plugin. Targets the Vault dev server that
+# is already part of the integration stack (its /v1/sys/health endpoint returns
+# JSON), so no extra service is needed.
+- name: Integration tests for fast uri plugin
+  hosts: local
+  gather_facts: false
+  vars:
+    vault_addr: "{{ lookup('env', 'VAULT_ADDR') }}"
+
+  tasks:
+    # --- basic GET with JSON parsing + content ---
+    - name: GET Vault health as JSON
+      uri:
+        url: "{{ vault_addr }}/v1/sys/health"
+        return_content: true
+      register: r
+
+    - name: Assert GET succeeded and ran via the fast plugin
+      assert:
+        that:
+          - r.status == 200
+          - r.json is defined
+          - r.json.initialized
+          - r.content is defined
+          - "'content_type' in r"
+          - not r.changed
+          - r['__produced_by_fast_plugin'] | default(false)
+        fail_msg: "uri GET did not behave as expected: {{ r }}"
+
+    # --- json is parsed even without return_content ---
+    - name: GET health without return_content
+      uri:
+        url: "{{ vault_addr }}/v1/sys/health"
+      register: r_nocontent
+
+    - name: Assert json present, content absent
+      assert:
+        that:
+          - r_nocontent.json.initialized
+          - "'content' not in r_nocontent"
+          - r_nocontent['__produced_by_fast_plugin'] | default(false)
+
+    # --- status_code list accepts a non-2xx (Vault answers 403/404 to an
+    #     unauthenticated request for an unknown path) ---
+    - name: GET an unauthorized path, accepting its error status
+      uri:
+        url: "{{ vault_addr }}/v1/sys/this-does-not-exist"
+        status_code: [403, 404]
+      register: r404
+
+    - name: Assert error status accepted and marked
+      assert:
+        that:
+          - r404.status in [403, 404]
+          - not r404.failed | default(false)
+          - r404['__produced_by_fast_plugin'] | default(false)
+
+    # --- an unexpected status fails the task ---
+    - name: GET the same path without allowing its error status
+      uri:
+        url: "{{ vault_addr }}/v1/sys/this-does-not-exist"
+      register: rfail
+      ignore_errors: true
+
+    - name: Assert unexpected status failed (and is therefore unmarked)
+      assert:
+        that:
+          - rfail.failed
+          - rfail.status in [403, 404]
+          - "'Status code was' in rfail.msg"
+          - "'__produced_by_fast_plugin' not in rfail"
+
+    # --- POST with a JSON body (Vault rejects unauthenticated, but the request
+    #     round-trips and we accept its 4xx to prove body encoding works) ---
+    - name: POST JSON body
+      uri:
+        url: "{{ vault_addr }}/v1/secret/data/aflp-uri-probe"
+        method: POST
+        body_format: json
+        body:
+          data:
+            k: v
+        status_code: [400, 403, 404]
+      register: rpost
+
+    - name: Assert POST round-tripped through the fast plugin
+      assert:
+        that:
+          - rpost.status in [400, 403, 404]
+          - rpost['__produced_by_fast_plugin'] | default(false)

@@ -59,6 +59,8 @@ Every successful fast (in-process) result carries the key `__produced_by_fast_pl
 | `tempfile` | `tempfile.mkstemp/mkdtemp` in-process | non-local, `become`, check-mode |
 | `copy` | atomic write via `shutil.move` | non-local, `src`-based copy, `become`, unsupported args |
 | `template` | Jinja2 rendering via `ansible.template.Templar` | non-local, `become`, unsupported args |
+| `lineinfile` | in-process regexp/line edit + atomic write | non-local, `become`, check-mode, file-attr args (`mode`/`owner`/…), `validate` |
+| `uri` | HTTP request via `ansible.module_utils.urls.open_url` | non-local, `become`, async, check-mode, `dest`/`src`, `form-multipart`, unsupported args |
 | `command` | `subprocess.run` (no shell) | non-local, `become`, async, `environment` vars, check-mode |
 | `shell` | `subprocess.run` (no Ansible module overhead) | non-local, `become`, async, `environment` vars, check-mode |
 | `hashivault_read` | `hvac.Client` in-process | non-local |
@@ -167,6 +169,8 @@ ansible/
       tempfile.py
       copy.py
       template.py
+      lineinfile.py
+      uri.py
       command.py
       shell.py
       hashivault_read.py

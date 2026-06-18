@@ -1,0 +1,222 @@
+---
+- name: Integration tests for fast lineinfile plugin
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_test_lineinfile
+
+  tasks:
+    - name: Reset work directory
+      file:
+        path: "{{ work_dir }}"
+        state: absent
+
+    - name: Create work directory
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    # --- append a line ---
+    - name: Seed a config file
+      copy:
+        content: "alpha\nbeta\n"
+        dest: "{{ work_dir }}/cfg"
+
+    - name: Append a line
+      lineinfile:
+        path: "{{ work_dir }}/cfg"
+        line: gamma
+      register: r_add
+
+    - name: Assert line appended via fast plugin
+      assert:
+        that:
+          - r_add.changed
+          - r_add.msg == 'line added'
+          - r_add['__produced_by_fast_plugin'] | default(false)
+
+    - name: Read file after append
+      slurp:
+        src: "{{ work_dir }}/cfg"
+      register: after_add
+
+    - name: Assert content after append
+      assert:
+        that:
+          - (after_add.content | b64decode) == 'alpha\nbeta\ngamma\n'
+
+    # --- idempotency ---
+    - name: Append the same line again
+      lineinfile:
+        path: "{{ work_dir }}/cfg"
+        line: gamma
+      register: r_add2
+
+    - name: Assert no change on re-run
+      assert:
+        that:
+          - not r_add2.changed
+          - r_add2['__produced_by_fast_plugin'] | default(false)
+
+    # --- regexp replace ---
+    - name: Seed selinux-style file
+      copy:
+        content: "SELINUX=permissive\nOTHER=1\n"
+        dest: "{{ work_dir }}/selinux"
+
+    - name: Replace via regexp
+      lineinfile:
+        path: "{{ work_dir }}/selinux"
+        regexp: '^SELINUX='
+        line: SELINUX=enforcing
+      register: r_re
+
+    - name: Read after replace
+      slurp:
+        src: "{{ work_dir }}/selinux"
+      register: after_re
+
+    - name: Assert replaced in place
+      assert:
+        that:
+          - r_re.changed
+          - r_re.msg == 'line replaced'
+          - (after_re.content | b64decode) == 'SELINUX=enforcing\nOTHER=1\n'
+          - r_re['__produced_by_fast_plugin'] | default(false)
+
+    # --- insertafter ---
+    - name: Seed httpd-style file
+      copy:
+        content: "#Listen 80\nServerName x\n"
+        dest: "{{ work_dir }}/httpd"
+
+    - name: Insert after a regexp anchor
+      lineinfile:
+        path: "{{ work_dir }}/httpd"
+        insertafter: '^#Listen '
+        line: Listen 8080
+      register: r_after
+
+    - name: Read after insertafter
+      slurp:
+        src: "{{ work_dir }}/httpd"
+      register: after_ins
+
+    - name: Assert inserted at the right place
+      assert:
+        that:
+          - r_after.changed
+          - (after_ins.content | b64decode) == '#Listen 80\nListen 8080\nServerName x\n'
+
+    # --- backrefs ---
+    - name: Seed host file
+      copy:
+        content: "host=oldname\n"
+        dest: "{{ work_dir }}/hostcfg"
+
+    - name: Replace with backrefs
+      lineinfile:
+        path: "{{ work_dir }}/hostcfg"
+        regexp: '^(host=).*'
+        line: '\g<1>newname'
+        backrefs: true
+      register: r_backref
+
+    - name: Read after backrefs
+      slurp:
+        src: "{{ work_dir }}/hostcfg"
+      register: after_backref
+
+    - name: Assert backref expansion
+      assert:
+        that:
+          - r_backref.changed
+          - (after_backref.content | b64decode) == 'host=newname\n'
+
+    # --- create ---
+    - name: Create a new file with a line
+      lineinfile:
+        path: "{{ work_dir }}/created.txt"
+        line: created-line
+        create: true
+      register: r_create
+
+    - name: Read created file
+      slurp:
+        src: "{{ work_dir }}/created.txt"
+      register: after_create
+
+    - name: Assert created
+      assert:
+        that:
+          - r_create.changed
+          - (after_create.content | b64decode) == 'created-line\n'
+
+    # --- backup ---
+    - name: Change a file with backup
+      lineinfile:
+        path: "{{ work_dir }}/cfg"
+        line: delta
+        backup: true
+      register: r_backup
+
+    - name: Assert backup file produced
+      assert:
+        that:
+          - r_backup.changed
+          - r_backup.backup | length > 0
+
+    - name: Stat the backup file
+      stat:
+        path: "{{ r_backup.backup }}"
+      register: backup_stat
+
+    - name: Assert backup exists
+      assert:
+        that:
+          - backup_stat.stat.exists
+
+    # --- state: absent ---
+    - name: Seed file for removal
+      copy:
+        content: "keep\n%wheel ALL\nkeep2\n"
+        dest: "{{ work_dir }}/sudoers"
+
+    - name: Remove a line by regexp
+      lineinfile:
+        path: "{{ work_dir }}/sudoers"
+        state: absent
+        regexp: '^%wheel'
+      register: r_absent
+
+    - name: Read after removal
+      slurp:
+        src: "{{ work_dir }}/sudoers"
+      register: after_absent
+
+    - name: Assert line removed
+      assert:
+        that:
+          - r_absent.changed
+          - r_absent.found == 1
+          - (after_absent.content | b64decode) == 'keep\nkeep2\n'
+          - r_absent['__produced_by_fast_plugin'] | default(false)
+
+    # --- absent idempotency ---
+    - name: Remove the same line again
+      lineinfile:
+        path: "{{ work_dir }}/sudoers"
+        state: absent
+        regexp: '^%wheel'
+      register: r_absent2
+
+    - name: Assert nothing removed second time
+      assert:
+        that:
+          - not r_absent2.changed
+          - r_absent2.found == 0
+
+    - name: Cleanup
+      file:
+        path: "{{ work_dir }}"
+        state: absent
