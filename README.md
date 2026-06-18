@@ -87,6 +87,51 @@ make test-int
 
 `make help` lists all available targets.
 
+## Benchmarking
+
+`make bench` measures the speedup the fast plugins deliver versus stock ansible-core on a local connection. For each plugin it runs the same task in a loop both ways — once with the fast action plugins enabled (the repo `ansible.cfg`) and once forced to stock ansible-core (`bench/ansible_stock.cfg`) — and reports the per-task wall-clock and the ratio. It needs only the controller image; no external services start.
+
+```bash
+make bench                                   # default: 200 iterations, all plugins
+make bench BENCH_ARGS='-n 500 -p copy,stat'  # custom size / subset of plugins
+```
+
+Example output (100 iterations, median of 3; absolute times vary by host, the speedup is the stable figure). Both matrix pairs land around **17–19× faster** overall:
+
+**Python 3.12 / ansible-core 2.19.3**
+
+```
+plugin          stock       fast    speedup
+--------------------------------------------
+stat         13.503s    0.807s      16.7x
+copy         26.400s    1.434s      18.4x
+template     27.200s    1.710s      15.9x
+file         14.068s    0.795s      17.7x
+command      13.904s    0.798s      17.4x
+tempfile     13.557s    0.782s      17.3x
+--------------------------------------------
+TOTAL       108.631s    6.325s      17.2x
+```
+
+**Python 3.14 / ansible-core 2.20.5**
+
+```
+plugin          stock       fast    speedup
+--------------------------------------------
+stat         14.323s    0.849s      16.9x
+copy         28.220s    1.389s      20.3x
+template     28.089s    1.404s      20.0x
+file         14.850s    0.819s      18.1x
+command      14.537s    0.838s      17.4x
+tempfile     14.208s    0.777s      18.3x
+--------------------------------------------
+TOTAL       114.227s    6.076s      18.8x
+```
+
+> Each pair uses its own controller image — select it with `PAIR`, e.g. `make bench PAIR=3.14:2.20.5:5.6.0`. Because the controller image builds to a single shared tag, switch pairs with `make build MATRIX='<pair>'` first (otherwise `docker compose run` reuses the cached image regardless of the build args).
+
+The reported time subtracts a zero-iteration overhead run (ansible startup + per-run setup) from the measured run, so it isolates the plugin's own per-invocation cost; the timed run is repeated and the median is reported. Each run also asserts the fast-path marker (`__produced_by_fast_plugin`) is present in fast mode and absent in stock mode, so the harness fails loudly rather than silently comparing the wrong code paths. Run `python bench/benchmark.py -h` for all flags (`-n/--iterations`, `-r/--repeat`, `-w/--warmup`, `-p/--plugins`).
+
 ## Test matrix
 
 Tests run against multiple Python × ansible-core pairs. The matrix is defined at the top of `Makefile`:
@@ -140,6 +185,12 @@ tests/
       local.ini           # localhost / connection: local
       ssh.ini             # ssh-target container
     test_integration.py   # pytest wrapper that invokes ansible-playbook
+
+bench/
+  benchmark.py            # Runner: times fast vs stock per plugin, reports speedup
+  ansible_stock.cfg       # Stock baseline config (no fast action/callback plugins)
+  playbooks/bench.yml     # Parametrised timed playbook (bench_plugin, bench_iterations)
+  templates/bench.j2      # Jinja2 fixture for the template benchmark
 
 docker/
   Dockerfile              # Controller image (ARG: PYTHON_VERSION, ANSIBLE_CORE_VERSION, HASHIVAULT_MODULE_VERSION)

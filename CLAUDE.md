@@ -116,6 +116,19 @@ The `ssh-target` container generates a fresh ED25519 key pair into the `ssh-keys
 4. Add a `test_myplugin()` function in `tests/integration/test_integration.py`.
 5. If the plugin uses external services, add them to `docker/docker-compose.yml` and seed data if needed.
 
+## Benchmark harness (`bench/`)
+
+`make bench` quantifies the fast-path speedup vs stock ansible-core. It runs the controller image with `--no-deps` (like `make test-unit`) — no external services. `bench/benchmark.py` drives `bench/playbooks/bench.yml` once per plugin per mode:
+
+- **fast** → `ANSIBLE_CONFIG=./ansible.cfg` (the repo config, fast plugins loaded)
+- **stock** → `ANSIBLE_CONFIG=bench/ansible_stock.cfg` (a deliberately stripped config with *no* `action_plugins`/`callback_plugins`, so bare names resolve to ansible-core modules)
+
+`bench.yml` is parametrised by `bench_plugin` (selects one timed block via `when:`) and `bench_iterations`. The reported figure is `time(N iterations) − time(0 iterations)`: the zero-iteration run captures ansible startup + per-run setup so the runner subtracts it, isolating the plugin's per-invocation cost. The N>0 run is repeated (`--repeat`, default 3) and the **median** is reported.
+
+Each block captures the `__produced_by_fast_plugin` marker from its *own* fresh `register` into the `bench_marker_present` fact, then one assert at the end checks it matches the mode (present in fast, absent in stock). This is load-bearing: all `TIMED <plugin>` tasks would otherwise share `register: bench_probe`, and a **skipped** task still overwrites its register with a skip result — so the marker must be captured per-block (`set_fact`) while the register is fresh, never read from a single shared `bench_probe` after the fact. The assert makes an accidentally-invalid comparison (both modes running the same code) fail loudly instead of silently reporting ~1x.
+
+Adding a plugin to the benchmark: add a `when: bench_plugin == '<name>'` block in `bench.yml` (timed task named `TIMED <name>` + the `Capture marker` `set_fact`) and append the name to `ALL_PLUGINS` in `benchmark.py`. Only pure-local plugins belong here; the hashivault/k8s plugins are network/service-bound, not CPU-bound local wins.
+
 ## Adding a new matrix pair
 
 1. Append `PY:AC:HV` to `MATRIX` in `Makefile`.

@@ -9,7 +9,10 @@ _PY  = $(word 1,$(subst :, ,$(PAIR)))
 _AC  = $(word 2,$(subst :, ,$(PAIR)))
 _HV  = $(word 3,$(subst :, ,$(PAIR)))
 
-.PHONY: help build test test-unit test-int shell clean
+.PHONY: help build test test-unit test-int bench shell clean
+
+# Extra args forwarded to bench/benchmark.py, e.g. BENCH_ARGS='-n 500 -p copy,stat'
+BENCH_ARGS ?=
 
 help:
 	@printf "ansible-fast-local-plugins — test harness\n"
@@ -22,6 +25,7 @@ help:
 	@printf "  test        Run unit + integration tests for every matrix pair\n"
 	@printf "  test-unit   Run unit tests only (no external services, uses --no-deps)\n"
 	@printf "  test-int    Run integration tests only (starts full Docker Compose stack)\n"
+	@printf "  bench       Benchmark fast plugins vs stock ansible-core (no external services)\n"
 	@printf "  shell       Open a bash shell inside the controller container\n"
 	@printf "  clean       Tear down all Compose stacks and delete local build artifacts\n"
 	@printf "  help        Show this message\n"
@@ -34,6 +38,8 @@ help:
 	@printf "  make test MATRIX='3.12:2.19.3:5.4.0'  # one specific pair\n"
 	@printf "  make test-unit                       # fast, no Docker services\n"
 	@printf "  make shell PAIR=3.14:2.20.5:5.6.0   # drop into a specific image\n"
+	@printf "  make bench                           # default benchmark (PAIR image)\n"
+	@printf "  make bench BENCH_ARGS='-n 500 -p copy,stat'  # custom size/plugins\n"
 
 build:
 	@$(call foreach_pair, \
@@ -94,6 +100,11 @@ test-int:
 			$(COMPOSE) down -v --remove-orphans; \
 	done; \
 	exit $$failed
+
+bench:
+	PYTHON_VERSION=$(_PY) ANSIBLE_CORE_VERSION=$(_AC) HASHIVAULT_MODULE_VERSION=$(_HV) \
+		$(COMPOSE) run --rm --no-deps --entrypoint "" controller \
+		python bench/benchmark.py $(BENCH_ARGS)
 
 shell:
 	PYTHON_VERSION=$(_PY) ANSIBLE_CORE_VERSION=$(_AC) HASHIVAULT_MODULE_VERSION=$(_HV) \

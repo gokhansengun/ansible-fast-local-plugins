@@ -1,0 +1,158 @@
+---
+# Parametrised benchmark playbook driven by bench/benchmark.py.
+#
+# The runner invokes this once per plugin (bench_plugin) and per mode:
+#   * fast  -> ANSIBLE_CONFIG=./ansible.cfg          (fast local action plugins)
+#   * stock -> ANSIBLE_CONFIG=bench/ansible_stock.cfg (standard ansible-core)
+#
+# Exactly one timed block runs (selected by bench_plugin). The timed task is
+# named "TIMED <plugin>" and loops bench_iterations times so the runner can
+# attribute wall-clock to that single task. Running with bench_iterations=0
+# yields the pure per-run overhead (startup + setup), which the runner
+# subtracts to isolate the plugin's cost.
+#
+# Each block captures the fast-path marker from its own (fresh) register into
+# bench_marker_present; a skipped block leaves that fact untouched. A single
+# assert at the end then confirms the run exercised the expected code path —
+# guarding against silently benchmarking the wrong plugins.
+- name: "AFLP benchmark — {{ bench_plugin }} ({{ 'fast' if (bench_expect_fast | bool) else 'stock' }})"
+  hosts: local
+  gather_facts: false
+  vars:
+    bench_iterations: 200
+    bench_expect_fast: true
+    work_dir: "/tmp/aflp_bench_{{ bench_plugin }}"
+    _items: "{{ range(bench_iterations | int) | list }}"
+
+  tasks:
+    - name: Reset work directory
+      file:
+        path: "{{ work_dir }}"
+        state: absent
+
+    - name: Create work directory
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    # ---------------------------------------------------------------- stat ---
+    - name: stat
+      when: bench_plugin == 'stat'
+      block:
+        - name: Seed file for stat
+          copy:
+            content: "benchmark target"
+            dest: "{{ work_dir }}/target"
+        - name: "TIMED stat"
+          stat:
+            path: "{{ work_dir }}/target"
+          loop: "{{ _items }}"
+          loop_control:
+            label: "{{ item }}"
+          register: bench_probe
+        - name: Capture marker
+          set_fact:
+            bench_marker_present: "{{ bench_probe.results[0]['__produced_by_fast_plugin'] | default(false) }}"
+          when: (bench_iterations | int) > 0
+
+    # ---------------------------------------------------------------- copy ---
+    - name: copy
+      when: bench_plugin == 'copy'
+      block:
+        - name: "TIMED copy"
+          copy:
+            content: "line {{ item }}\n"
+            dest: "{{ work_dir }}/copy_{{ item }}.txt"
+          loop: "{{ _items }}"
+          loop_control:
+            label: "{{ item }}"
+          register: bench_probe
+        - name: Capture marker
+          set_fact:
+            bench_marker_present: "{{ bench_probe.results[0]['__produced_by_fast_plugin'] | default(false) }}"
+          when: (bench_iterations | int) > 0
+
+    # ------------------------------------------------------------ template ---
+    - name: template
+      when: bench_plugin == 'template'
+      block:
+        - name: "TIMED template"
+          template:
+            src: "{{ playbook_dir }}/../templates/bench.j2"
+            dest: "{{ work_dir }}/tmpl_{{ item }}.txt"
+          vars:
+            recipient: "user{{ item }}"
+          loop: "{{ _items }}"
+          loop_control:
+            label: "{{ item }}"
+          register: bench_probe
+        - name: Capture marker
+          set_fact:
+            bench_marker_present: "{{ bench_probe.results[0]['__produced_by_fast_plugin'] | default(false) }}"
+          when: (bench_iterations | int) > 0
+
+    # ---------------------------------------------------------------- file ---
+    - name: file
+      when: bench_plugin == 'file'
+      block:
+        - name: "TIMED file"
+          file:
+            path: "{{ work_dir }}/dir_{{ item }}"
+            state: directory
+          loop: "{{ _items }}"
+          loop_control:
+            label: "{{ item }}"
+          register: bench_probe
+        - name: Capture marker
+          set_fact:
+            bench_marker_present: "{{ bench_probe.results[0]['__produced_by_fast_plugin'] | default(false) }}"
+          when: (bench_iterations | int) > 0
+
+    # ------------------------------------------------------------- command ---
+    - name: command
+      when: bench_plugin == 'command'
+      block:
+        - name: "TIMED command"
+          command: "true"
+          changed_when: false
+          loop: "{{ _items }}"
+          loop_control:
+            label: "{{ item }}"
+          register: bench_probe
+        - name: Capture marker
+          set_fact:
+            bench_marker_present: "{{ bench_probe.results[0]['__produced_by_fast_plugin'] | default(false) }}"
+          when: (bench_iterations | int) > 0
+
+    # ------------------------------------------------------------ tempfile ---
+    - name: tempfile
+      when: bench_plugin == 'tempfile'
+      block:
+        - name: "TIMED tempfile"
+          tempfile:
+            state: file
+            prefix: "bench."
+          loop: "{{ _items }}"
+          loop_control:
+            label: "{{ item }}"
+          register: bench_probe
+        - name: Capture marker
+          set_fact:
+            bench_marker_present: "{{ bench_probe.results[0]['__produced_by_fast_plugin'] | default(false) }}"
+          when: (bench_iterations | int) > 0
+
+    # --------------------------------------------------------- validation ---
+    # In fast mode every iteration must carry the fast-path marker; in stock
+    # mode it must not. Skipped on the overhead (bench_iterations=0) run, where
+    # the timed loop produced no results to capture.
+    - name: Verify the benchmark exercised the expected code path
+      assert:
+        that:
+          - "(bench_marker_present | default(false) | bool) == (bench_expect_fast | bool)"
+        success_msg: "Confirmed {{ bench_plugin }} ran via the {{ 'fast' if (bench_expect_fast | bool) else 'stock' }} path"
+        fail_msg: >-
+          Benchmark mode mismatch for {{ bench_plugin }}: expected
+          fast={{ bench_expect_fast }} but marker present=
+          {{ bench_marker_present | default(false) }}.
+          The benchmark would be comparing the wrong code paths.
+      when: (bench_iterations | int) > 0
