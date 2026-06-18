@@ -1,0 +1,160 @@
+---
+# Parity harness, driven by test_integration.py::test_parity.
+#
+# The runner invokes this once per plugin per mode:
+#   * stock -> AFLP_DISABLE=1 in the environment (kill-switch -> standard plugin)
+#   * fast  -> normal (fast in-process plugin)
+#
+# Exactly one block runs (selected by parity_plugin). It performs one operation,
+# captures the registered result `r`, and — for plugins that produce a file —
+# a `sidecar` checksum+mode of that file, then dumps {result, sidecar} as JSON to
+# result_out. The runner loads the stock and fast dumps and asserts they match.
+#
+# Operations deliberately set no mode, so the sidecar also verifies that a fresh
+# file's permissions (the umask default, applied centrally by atomic_write) match
+# stock ansible — not just the explicit-mode path.
+- name: "Parity harness — {{ parity_plugin }}"
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: "/tmp/aflp_parity_work"
+    result_out: "/tmp/aflp_parity_result.json"
+
+  tasks:
+    - name: Reset work directory
+      file:
+        path: "{{ work_dir }}"
+        state: absent
+
+    - name: Create work directory
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    # ---------------------------------------------------------------- copy ---
+    - name: copy
+      when: parity_plugin == 'copy'
+      block:
+        - copy:
+            content: "parity copy\nsecond line\n"
+            dest: "{{ work_dir }}/out"
+          register: r
+        - stat: { path: "{{ work_dir }}/out", checksum_algorithm: sha256 }
+          register: sc
+        - copy:
+            content: "{{ {'result': r, 'sidecar': {'checksum': sc.stat.checksum, 'mode': sc.stat.mode}} | to_nice_json }}"
+            dest: "{{ result_out }}"
+
+    # ------------------------------------------------------------ template ---
+    - name: template
+      when: parity_plugin == 'template'
+      block:
+        - template:
+            src: "{{ playbook_dir }}/../templates/greeting.j2"
+            dest: "{{ work_dir }}/rendered"
+          vars:
+            recipient: "Parity"
+          register: r
+        - stat: { path: "{{ work_dir }}/rendered", checksum_algorithm: sha256 }
+          register: sc
+        - copy:
+            content: "{{ {'result': r, 'sidecar': {'checksum': sc.stat.checksum, 'mode': sc.stat.mode}} | to_nice_json }}"
+            dest: "{{ result_out }}"
+
+    # ------------------------------------------------------------ lineinfile -
+    - name: lineinfile
+      when: parity_plugin == 'lineinfile'
+      block:
+        - copy:
+            content: "alpha\nbeta\n"
+            dest: "{{ work_dir }}/cfg"
+        - lineinfile:
+            path: "{{ work_dir }}/cfg"
+            line: "gamma"
+          register: r
+        - stat: { path: "{{ work_dir }}/cfg", checksum_algorithm: sha256 }
+          register: sc
+        - copy:
+            content: "{{ {'result': r, 'sidecar': {'checksum': sc.stat.checksum, 'mode': sc.stat.mode}} | to_nice_json }}"
+            dest: "{{ result_out }}"
+
+    # ---------------------------------------------------------------- stat ---
+    - name: stat
+      when: parity_plugin == 'stat'
+      block:
+        - copy:
+            content: "stat target\n"
+            dest: "{{ work_dir }}/t"
+        - stat: { path: "{{ work_dir }}/t" }
+          register: r
+        - copy:
+            content: "{{ {'result': r, 'sidecar': none} | to_nice_json }}"
+            dest: "{{ result_out }}"
+
+    # --------------------------------------------------------------- slurp ---
+    - name: slurp
+      when: parity_plugin == 'slurp'
+      block:
+        - copy:
+            content: "slurp me\n"
+            dest: "{{ work_dir }}/s"
+        - slurp: { src: "{{ work_dir }}/s" }
+          register: r
+        - copy:
+            content: "{{ {'result': r, 'sidecar': none} | to_nice_json }}"
+            dest: "{{ result_out }}"
+
+    # --------------------------------------------------------------- fetch ---
+    - name: fetch
+      when: parity_plugin == 'fetch'
+      block:
+        - copy:
+            content: "fetch source\n"
+            dest: "{{ work_dir }}/src"
+        - fetch:
+            src: "{{ work_dir }}/src"
+            dest: "{{ work_dir }}/fetched"
+            flat: true
+          register: r
+        - stat: { path: "{{ work_dir }}/fetched", checksum_algorithm: sha256 }
+          register: sc
+        - copy:
+            content: "{{ {'result': r, 'sidecar': {'checksum': sc.stat.checksum, 'mode': sc.stat.mode}} | to_nice_json }}"
+            dest: "{{ result_out }}"
+
+    # ------------------------------------------------------------- get_url ---
+    - name: get_url
+      when: parity_plugin == 'get_url'
+      block:
+        - copy:
+            content: "get_url body\n"
+            dest: "{{ work_dir }}/source"
+        - get_url:
+            url: "file://{{ work_dir }}/source"
+            dest: "{{ work_dir }}/dl"
+          register: r
+        - stat: { path: "{{ work_dir }}/dl", checksum_algorithm: sha256 }
+          register: sc
+        - copy:
+            content: "{{ {'result': r, 'sidecar': {'checksum': sc.stat.checksum, 'mode': sc.stat.mode}} | to_nice_json }}"
+            dest: "{{ result_out }}"
+
+    # ------------------------------------------------------------- command ---
+    - name: command
+      when: parity_plugin == 'command'
+      block:
+        - command: "echo parity-command"
+          register: r
+        - copy:
+            content: "{{ {'result': r, 'sidecar': none} | to_nice_json }}"
+            dest: "{{ result_out }}"
+
+    # --------------------------------------------------------------- shell ---
+    - name: shell
+      when: parity_plugin == 'shell'
+      block:
+        - shell: "echo parity-shell"
+          register: r
+        - copy:
+            content: "{{ {'result': r, 'sidecar': none} | to_nice_json }}"
+            dest: "{{ result_out }}"

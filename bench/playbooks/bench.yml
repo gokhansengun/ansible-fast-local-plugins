@@ -141,6 +141,90 @@
             bench_marker_present: "{{ bench_probe.results[0]['__produced_by_fast_plugin'] | default(false) }}"
           when: (bench_iterations | int) > 0
 
+    # ------------------------------------------------------------ lineinfile -
+    - name: lineinfile
+      when: bench_plugin == 'lineinfile'
+      block:
+        - name: Seed file for lineinfile
+          copy:
+            content: "seed\n"
+            dest: "{{ work_dir }}/lif.txt"
+        - name: "TIMED lineinfile"
+          lineinfile:
+            path: "{{ work_dir }}/lif.txt"
+            line: "line {{ item }}"
+          loop: "{{ _items }}"
+          loop_control:
+            label: "{{ item }}"
+          register: bench_probe
+        - name: Capture marker
+          set_fact:
+            bench_marker_present: "{{ bench_probe.results[0]['__produced_by_fast_plugin'] | default(false) }}"
+          when: (bench_iterations | int) > 0
+
+    # --------------------------------------------------------------- slurp ---
+    - name: slurp
+      when: bench_plugin == 'slurp'
+      block:
+        - name: Seed file for slurp
+          copy:
+            content: "benchmark slurp payload\n"
+            dest: "{{ work_dir }}/slurp.txt"
+        - name: "TIMED slurp"
+          slurp:
+            src: "{{ work_dir }}/slurp.txt"
+          loop: "{{ _items }}"
+          loop_control:
+            label: "{{ item }}"
+          register: bench_probe
+        - name: Capture marker
+          set_fact:
+            bench_marker_present: "{{ bench_probe.results[0]['__produced_by_fast_plugin'] | default(false) }}"
+          when: (bench_iterations | int) > 0
+
+    # --------------------------------------------------------------- fetch ---
+    - name: fetch
+      when: bench_plugin == 'fetch'
+      block:
+        - name: Seed source for fetch
+          copy:
+            content: "benchmark fetch source\n"
+            dest: "{{ work_dir }}/fetch_src.txt"
+        - name: "TIMED fetch"
+          fetch:
+            src: "{{ work_dir }}/fetch_src.txt"
+            dest: "{{ work_dir }}/fetched_{{ item }}.txt"
+            flat: true
+          loop: "{{ _items }}"
+          loop_control:
+            label: "{{ item }}"
+          register: bench_probe
+        - name: Capture marker
+          set_fact:
+            bench_marker_present: "{{ bench_probe.results[0]['__produced_by_fast_plugin'] | default(false) }}"
+          when: (bench_iterations | int) > 0
+
+    # ------------------------------------------------------------- get_url ---
+    - name: get_url
+      when: bench_plugin == 'get_url'
+      block:
+        - name: Seed source for get_url
+          copy:
+            content: "benchmark get_url body\n"
+            dest: "{{ work_dir }}/geturl_src"
+        - name: "TIMED get_url"
+          get_url:
+            url: "file://{{ work_dir }}/geturl_src"
+            dest: "{{ work_dir }}/geturl_dl_{{ item }}"
+          loop: "{{ _items }}"
+          loop_control:
+            label: "{{ item }}"
+          register: bench_probe
+        - name: Capture marker
+          set_fact:
+            bench_marker_present: "{{ bench_probe.results[0]['__produced_by_fast_plugin'] | default(false) }}"
+          when: (bench_iterations | int) > 0
+
     # --------------------------------------------------------- validation ---
     # In fast mode every iteration must carry the fast-path marker; in stock
     # mode it must not. Skipped on the overhead (bench_iterations=0) run, where

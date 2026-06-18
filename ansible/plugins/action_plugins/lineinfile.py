@@ -250,7 +250,7 @@ class ActionModule(ActionBase):
         if changed:
             if backup and file_existed:
                 backupdest = self._backup_local(dest)
-            err = self._write(dest, b_lines, file_existed)
+            err = self._write(dest, b_lines)
             if err:
                 return dict(failed=True, msg=err)
 
@@ -290,7 +290,7 @@ class ActionModule(ActionBase):
         if changed:
             if backup:
                 backupdest = self._backup_local(dest)
-            err = self._write(dest, b_lines, True)
+            err = self._write(dest, b_lines)
             if err:
                 return dict(failed=True, msg=err)
             msg = '%s line(s) removed' % len(found)
@@ -299,18 +299,13 @@ class ActionModule(ActionBase):
         return result
 
     @staticmethod
-    def _write(dest, b_lines, file_existed):
+    def _write(dest, b_lines):
         """Atomically write b_lines to dest. Returns an error string or None.
 
-        A brand-new file gets umask-derived perms (matching the standard
-        module's atomic_move); an existing file keeps its current perms.
+        atomic_write keeps an existing file's perms and applies the umask
+        default to a brand-new file (matching the standard module's atomic_move).
         """
-        mode = None
-        if not file_existed:
-            cur_umask = os.umask(0)
-            os.umask(cur_umask)
-            mode = 0o666 & ~cur_umask
-        return atomic_write(dest, b''.join(b_lines), mode=mode)
+        return atomic_write(dest, b''.join(b_lines))
 
     @staticmethod
     def _backup_local(fn):

@@ -7,6 +7,7 @@ they only run inside the Docker Compose stack (make test-int / make test).
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 
@@ -206,3 +207,87 @@ def test_fallback_ssh():
         os.path.join(PLAYBOOK_DIR, 'test_fallback_ssh.yml'),
         inventory=INV_SSH,
     ))
+
+
+# ---------------------------------------------------------------------------
+# Output-parity testing (#5)
+#
+# For each deterministic local plugin, run parity.yml twice — once stock
+# (AFLP_DISABLE=1) and once fast — then assert two things:
+#   1. side-effect parity: the produced file's checksum+mode are identical;
+#   2. result parity: every result key present in BOTH dumps has an equal value.
+# Result parity compares only the keys both paths emit (the fast plugins
+# intentionally return a minimal subset), recursing into nested dicts/lists, and
+# skips a denylist of volatile keys (timestamps, elapsed, msg text, ...).
+# ---------------------------------------------------------------------------
+
+PARITY_PLAYBOOK = os.path.join(PLAYBOOK_DIR, 'parity.yml')
+PARITY_PLUGINS = [
+    'copy', 'template', 'lineinfile', 'stat', 'slurp', 'fetch', 'get_url',
+    'command', 'shell',
+]
+FAST_PLUGIN_MARKER = '__produced_by_fast_plugin'
+
+# Keys whose values legitimately differ between two separate runs (or are just
+# human-facing text), skipped at any depth of the result comparison.
+_PARITY_DENYLIST = {
+    FAST_PLUGIN_MARKER, 'invocation', 'warnings', 'deprecations',
+    'elapsed', 'start', 'end', 'delta', 'diff', 'msg',
+    'atime', 'mtime', 'ctime', 'inode', 'dev',
+    # 'src': stock copy/template report an internal AnsiballZ tmp staging path
+    # (e.g. /root/.ansible/tmp/.../.source); the fast plugins report the real
+    # source. It is an implementation detail, not a behavioural contract.
+    'src',
+}
+
+
+def _parity_diffs(stock, fast, path=''):
+    """Recursively diff common keys of two result values. Returns a list of strings."""
+    diffs = []
+    if isinstance(stock, dict) and isinstance(fast, dict):
+        for key in set(stock) & set(fast):
+            if key in _PARITY_DENYLIST or key.startswith('_ansible_'):
+                continue
+            diffs += _parity_diffs(stock[key], fast[key], f'{path}.{key}')
+    elif isinstance(stock, list) and isinstance(fast, list):
+        if len(stock) != len(fast):
+            diffs.append(f'{path}: list length stock={len(stock)} fast={len(fast)}')
+        else:
+            for i, (s, f) in enumerate(zip(stock, fast)):
+                diffs += _parity_diffs(s, f, f'{path}[{i}]')
+    elif stock != fast:
+        diffs.append(f'{path or "<root>"}: stock={stock!r} fast={fast!r}')
+    return diffs
+
+
+def _run_parity_mode(plugin, tag, env):
+    out = f'/tmp/aflp_parity_{plugin}_{tag}.json'
+    work = f'/tmp/aflp_parity_{plugin}_work'
+    result = _run(PARITY_PLAYBOOK,
+                  extra_vars={'parity_plugin': plugin, 'result_out': out, 'work_dir': work},
+                  env=env)
+    _assert_playbook(result)
+    with open(out) as fh:
+        return json.load(fh)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('plugin', PARITY_PLUGINS)
+def test_parity(plugin):
+    """Fast plugin output must match stock ansible-core for the same task."""
+    stock = _run_parity_mode(plugin, 'stock', env={'AFLP_DISABLE': '1'})
+    fast = _run_parity_mode(plugin, 'fast', env=None)
+
+    # Validity: ensure we genuinely compared fast vs stock, not fast vs fast.
+    assert fast['result'].get(FAST_PLUGIN_MARKER) is True, \
+        f'{plugin}: fast run was not marked — did the fast path run?'
+    assert FAST_PLUGIN_MARKER not in stock['result'], \
+        f'{plugin}: stock run carried the fast marker — kill-switch did not take effect'
+
+    # Side-effect parity (produced file checksum + mode), when applicable.
+    assert fast['sidecar'] == stock['sidecar'], (
+        f'{plugin} side-effect differs: fast={fast["sidecar"]} stock={stock["sidecar"]}')
+
+    # Result parity over common keys.
+    diffs = _parity_diffs(stock['result'], fast['result'])
+    assert not diffs, f'{plugin} result parity diffs:\n' + '\n'.join(diffs)

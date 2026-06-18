@@ -34,7 +34,8 @@ INVENTORY = os.path.join(REPO_ROOT, 'tests', 'integration', 'inventory', 'local.
 FAST_CFG = os.path.join(REPO_ROOT, 'ansible.cfg')
 STOCK_CFG = os.path.join(BENCH_DIR, 'ansible_stock.cfg')
 
-ALL_PLUGINS = ['stat', 'copy', 'template', 'file', 'command', 'tempfile']
+ALL_PLUGINS = ['stat', 'copy', 'template', 'file', 'command', 'tempfile',
+               'lineinfile', 'slurp', 'fetch', 'get_url']
 
 MODES = (
     # (label, config path, expect_fast)
@@ -89,8 +90,8 @@ def _fmt(seconds: float) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('-n', '--iterations', type=int, default=200,
-                        help='timed loop iterations per plugin (default: 200)')
+    parser.add_argument('-n', '--iterations', type=int, default=100,
+                        help='timed loop iterations per plugin (default: 100)')
     parser.add_argument('-r', '--repeat', type=int, default=3,
                         help='timed repetitions; median is reported (default: 3)')
     parser.add_argument('-w', '--warmup', type=int, default=1,

@@ -27,7 +27,7 @@ if not _is_local(conn) or self._play_context.become:
 
 ### Atomic writes
 
-`atomic_write()` in `_action_utils.py` writes to a same-directory temp file then `shutil.move()`s it. Used by `copy.py` and `template.py`.
+`atomic_write()` in `_action_utils.py` writes to a same-directory temp file then `shutil.move()`s it. Used by `copy.py`, `template.py`, `lineinfile.py`, and `get_url.py`. Mode handling matches stock ansible's `atomic_move`: an explicit `mode` is applied; otherwise an *existing* file keeps its perms and a *new* file gets the umask default (`0666 & ~umask`) — **not** mkstemp's restrictive `0600`. This umask default lives only here, so `copy`/`template`/`lineinfile`/`get_url` all inherit it (don't re-implement it per plugin).
 
 ### Copy vs Template fallback style
 
@@ -77,6 +77,12 @@ Integration tests require the full Docker Compose stack (vault, kind, ssh-target
 ```
 make test-int   # or: make test  (unit + integration)
 ```
+
+### Output-parity tests (`test_parity`)
+
+`tests/integration/playbooks/parity.yml` + the `test_parity` parametrisation in `test_integration.py` prove each deterministic local plugin (copy, template, lineinfile, stat, slurp, fetch, get_url, command, shell) produces output equivalent to stock ansible-core. For each plugin the runner runs `parity.yml` twice — stock via `AFLP_DISABLE=1` (the #4 kill-switch), then fast — and compares the two dumped results. Two checks: **side-effect parity** (the produced file's checksum+mode match) and **result parity** (`_parity_diffs` recurses and compares only keys present in *both* dumps, since fast plugins intentionally return a minimal subset, skipping a volatile `_PARITY_DENYLIST`). Validity asserts the fast dump carries the marker and the stock dump does not, so it can never silently compare fast-vs-fast.
+
+> Two real divergences this surfaced: (1) stock copy/template report `src` as an internal AnsiballZ tmp staging path while the fast plugins report the real source — denylisted as an implementation detail. (2) fast copy/template created a *new* file at `0600` (mkstemp) whereas stock uses the umask default `0644` — **fixed** by giving `atomic_write` the umask default for new files (see Atomic writes above), which also let get_url/lineinfile drop their own per-plugin umask code. `parity.yml` therefore sets no mode, so the sidecar verifies the default-perms path too.
 
 ---
 

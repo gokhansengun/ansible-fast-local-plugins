@@ -115,6 +115,13 @@ def atomic_write(dest, b_content, mode=None):
             os.chmod(tmp_path, _parse_mode(mode))
         elif os.path.exists(dest):
             os.chmod(tmp_path, stat_module.S_IMODE(os.stat(dest).st_mode))
+        else:
+            # New file, no mode requested: apply the umask default like stock
+            # ansible's atomic_move, rather than leaving mkstemp's restrictive
+            # 0600. (mkstemp always creates 0600.)
+            cur_umask = os.umask(0)
+            os.umask(cur_umask)
+            os.chmod(tmp_path, 0o666 & ~cur_umask)
 
         shutil.move(tmp_path, dest)
     except Exception as e:

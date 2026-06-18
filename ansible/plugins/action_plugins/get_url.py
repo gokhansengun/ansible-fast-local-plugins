@@ -163,12 +163,9 @@ class ActionModule(ActionBase):
         result['checksum_dest'] = checksum_dest
 
         if checksum_src != checksum_dest:
-            write_mode = mode
-            if write_mode is None and not dest_existed:
-                cur_umask = os.umask(0)
-                os.umask(cur_umask)
-                write_mode = 0o666 & ~cur_umask
-            err = atomic_write(dest, body, mode=write_mode)
+            # atomic_write preserves an existing file's mode, or applies the
+            # umask default for a new file, when mode is None.
+            err = atomic_write(dest, body, mode=mode)
             if err:
                 return dict(failed=True, url=url, dest=dest, msg=err)
             result['changed'] = True

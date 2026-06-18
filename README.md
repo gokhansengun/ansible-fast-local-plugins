@@ -114,6 +114,8 @@ A/B correctness checks. The variable is read per task, so it can vary between ru
 
 The `kubernetes.core` collection overrides (`k8s`, `k8s_info`, `helm_repository`) follow the same pattern via `kubectl`/`helm`, delegating to the genuine collection when non-local.
 
+Equivalence to stock ansible-core is enforced by **output-parity tests**: for each deterministic plugin the integration suite runs the same task fast and again with `AFLP_DISABLE=1` (stock), then asserts the produced file (checksum + mode) and the shared result keys match.
+
 ## Prerequisites
 
 - Docker (with Compose v2 — `docker compose`)
@@ -140,25 +142,29 @@ make test-int
 `make bench` measures the speedup the fast plugins deliver versus stock ansible-core on a local connection. For each plugin it runs the same task in a loop both ways — once with the fast action plugins enabled (the repo `ansible.cfg`) and once forced to stock ansible-core (`bench/ansible_stock.cfg`) — and reports the per-task wall-clock and the ratio. It needs only the controller image; no external services start.
 
 ```bash
-make bench                                   # default: 200 iterations, all plugins
+make bench                                   # default: 100 iterations, all plugins
 make bench BENCH_ARGS='-n 500 -p copy,stat'  # custom size / subset of plugins
 ```
 
-Example output (100 iterations, median of 3; absolute times vary by host, the speedup is the stable figure). Both matrix pairs land around **17–19× faster** overall:
+Example output (100 iterations, median of 3; absolute times vary by host, the speedup is the stable figure). Both matrix pairs land around **11–12× faster** overall, with the file-writing plugins (`copy`/`template`) up around **15×**:
 
 **Python 3.12 / ansible-core 2.19.3**
 
 ```
 plugin          stock       fast    speedup
 --------------------------------------------
-stat         13.503s    0.807s      16.7x
-copy         26.400s    1.434s      18.4x
-template     27.200s    1.710s      15.9x
-file         14.068s    0.795s      17.7x
-command      13.904s    0.798s      17.4x
-tempfile     13.557s    0.782s      17.3x
+stat         14.107s    1.305s      10.8x
+copy         27.054s    1.910s      14.2x
+template     27.138s    1.843s      14.7x
+file         14.781s    1.323s      11.2x
+command      14.372s    1.280s      11.2x
+tempfile     13.985s    1.253s      11.2x
+lineinfile   14.280s    1.361s      10.5x
+slurp        13.898s    1.266s      11.0x
+fetch        13.804s    1.739s       7.9x
+get_url      19.019s    2.332s       8.2x
 --------------------------------------------
-TOTAL       108.631s    6.325s      17.2x
+TOTAL       172.439s   15.613s      11.0x
 ```
 
 **Python 3.14 / ansible-core 2.20.5**
@@ -166,14 +172,18 @@ TOTAL       108.631s    6.325s      17.2x
 ```
 plugin          stock       fast    speedup
 --------------------------------------------
-stat         14.323s    0.849s      16.9x
-copy         28.220s    1.389s      20.3x
-template     28.089s    1.404s      20.0x
-file         14.850s    0.819s      18.1x
-command      14.537s    0.838s      17.4x
-tempfile     14.208s    0.777s      18.3x
+stat         14.768s    1.355s      10.9x
+copy         28.932s    1.838s      15.7x
+template     29.824s    1.871s      15.9x
+file         15.497s    1.374s      11.3x
+command      15.206s    1.338s      11.4x
+tempfile     14.731s    1.308s      11.3x
+lineinfile   15.843s    1.329s      11.9x
+slurp        14.845s    1.361s      10.9x
+fetch        14.610s    1.723s       8.5x
+get_url      19.729s    2.265s       8.7x
 --------------------------------------------
-TOTAL       114.227s    6.076s      18.8x
+TOTAL       183.987s   15.762s      11.7x
 ```
 
 > Each pair uses its own controller image — select it with `PAIR`, e.g. `make bench PAIR=3.14:2.20.5:5.6.0`. Because the controller image builds to a single shared tag, switch pairs with `make build MATRIX='<pair>'` first (otherwise `docker compose run` reuses the cached image regardless of the build args).

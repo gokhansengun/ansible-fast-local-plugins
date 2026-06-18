@@ -176,6 +176,16 @@ class TestAtomicWrite:
         mode = stat.S_IMODE(os.stat(dest).st_mode)
         assert mode == 0o600
 
+    def test_new_file_uses_umask_default(self, tmp_path):
+        # A fresh file with no explicit mode must get the umask default
+        # (0666 & ~umask), like stock ansible — not mkstemp's restrictive 0600.
+        dest = str(tmp_path / 'fresh.txt')
+        err = utils.atomic_write(dest, b'data')
+        assert err is None
+        cur_umask = os.umask(0)
+        os.umask(cur_umask)
+        assert stat.S_IMODE(os.stat(dest).st_mode) == (0o666 & ~cur_umask)
+
     def test_preserves_existing_mode(self, tmp_path):
         dest = tmp_path / 'output.txt'
         dest.write_bytes(b'old')
