@@ -49,7 +49,24 @@ def _load_builtin_action(plugin_name: str):
     return mod
 
 
+# Global kill-switch. When AFLP_DISABLE is truthy, every fast plugin treats the
+# connection as non-local and delegates to stock ansible-core — an operator can
+# force the entire fast path off (e.g. to check "is a fast plugin causing this?")
+# without editing ansible.cfg, roles or playbooks. Read at gate time so it can be
+# toggled per run.
+_DISABLE_ENV = 'AFLP_DISABLE'
+_TRUTHY = ('1', 'true', 'yes', 'on')
+
+
+def _fast_disabled():
+    """True when the fast path is globally disabled via the AFLP_DISABLE env var."""
+    return os.environ.get(_DISABLE_ENV, '').strip().lower() in _TRUTHY
+
+
 def _is_local(connection):
+    # The kill-switch reports "not local" so the gate falls back to stock.
+    if _fast_disabled():
+        return False
     if getattr(connection, 'transport', None) == 'local':
         return True
     load_name = getattr(connection, '_load_name', '') or ''

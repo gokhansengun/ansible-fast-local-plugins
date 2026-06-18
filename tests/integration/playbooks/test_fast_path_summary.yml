@@ -1,0 +1,41 @@
+---
+# Exercises the aflp_fast_path_summary callback: a handful of fast-path tasks
+# plus one task forced down the fallback (lineinfile with a file-attr arg, which
+# the fast plugin delegates to the stock module). The test wrapper greps the
+# play's stdout for the summary table the callback prints at the end.
+- name: Drive the fast-path summary callback
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_test_summary
+
+  tasks:
+    - name: "Create work dir (fast file)"
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    - name: "Write a file (fast copy)"
+      copy:
+        content: "one\n"
+        dest: "{{ work_dir }}/f"
+
+    - name: "Stat it (fast stat)"
+      stat:
+        path: "{{ work_dir }}/f"
+
+    - name: "Append a line (fast lineinfile)"
+      lineinfile:
+        path: "{{ work_dir }}/f"
+        line: "two"
+
+    - name: "Append a line with mode (lineinfile forced fallback)"
+      lineinfile:
+        path: "{{ work_dir }}/f"
+        line: "three"
+        mode: "0644"
+
+    - name: "Cleanup (fast file)"
+      file:
+        path: "{{ work_dir }}"
+        state: absent

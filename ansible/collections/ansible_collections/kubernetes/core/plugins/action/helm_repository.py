@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 
 from ansible.module_utils._text import to_native
@@ -12,6 +13,9 @@ FAST_HELM_REPOSITORY_VERSION = '1.0'
 
 
 def _is_local(connection):
+    # AFLP_DISABLE kill-switch: force fallback to the genuine kubernetes.core plugin.
+    if os.environ.get('AFLP_DISABLE', '').strip().lower() in ('1', 'true', 'yes', 'on'):
+        return False
     if getattr(connection, 'transport', None) == 'local':
         return True
     load_name = getattr(connection, '_load_name', '') or ''

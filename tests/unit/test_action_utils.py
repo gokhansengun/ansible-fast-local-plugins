@@ -54,6 +54,38 @@ class TestIsLocal:
         conn._load_name = 'winrm'
         assert utils._is_local(conn) is False
 
+    def test_kill_switch_forces_not_local(self, monkeypatch):
+        conn = MagicMock()
+        conn.transport = 'local'  # genuinely local...
+        monkeypatch.setenv('AFLP_DISABLE', '1')
+        assert utils._is_local(conn) is False  # ...but the kill-switch overrides
+
+    def test_kill_switch_unset_is_local(self, monkeypatch):
+        conn = MagicMock()
+        conn.transport = 'local'
+        monkeypatch.delenv('AFLP_DISABLE', raising=False)
+        assert utils._is_local(conn) is True
+
+
+# ---------------------------------------------------------------------------
+# _fast_disabled (AFLP_DISABLE kill-switch)
+# ---------------------------------------------------------------------------
+
+class TestFastDisabled:
+    @pytest.mark.parametrize('value', ['1', 'true', 'TRUE', 'Yes', 'on', '  on  '])
+    def test_truthy_values_disable(self, monkeypatch, value):
+        monkeypatch.setenv('AFLP_DISABLE', value)
+        assert utils._fast_disabled() is True
+
+    @pytest.mark.parametrize('value', ['0', 'false', 'no', 'off', '', 'maybe'])
+    def test_other_values_do_not_disable(self, monkeypatch, value):
+        monkeypatch.setenv('AFLP_DISABLE', value)
+        assert utils._fast_disabled() is False
+
+    def test_unset_does_not_disable(self, monkeypatch):
+        monkeypatch.delenv('AFLP_DISABLE', raising=False)
+        assert utils._fast_disabled() is False
+
 
 # ---------------------------------------------------------------------------
 # _parse_mode

@@ -17,12 +17,13 @@ INV_LOCAL = os.path.join(os.path.dirname(__file__), 'inventory', 'local.ini')
 INV_SSH = os.path.join(os.path.dirname(__file__), 'inventory', 'ssh.ini')
 
 
-def _run(playbook_file, inventory=None, extra_vars=None):
+def _run(playbook_file, inventory=None, extra_vars=None, env=None):
     inv = inventory or INV_LOCAL
     cmd = ['ansible-playbook', '-i', inv, playbook_file]
     for key, val in (extra_vars or {}).items():
         cmd += ['-e', f'{key}={val}']
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd='/workspace')
+    run_env = {**os.environ, **env} if env else None
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd='/workspace', env=run_env)
     return result
 
 
@@ -93,6 +94,50 @@ def test_fetch():
 @pytest.mark.integration
 def test_get_url():
     _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_get_url.yml')))
+
+
+@pytest.mark.integration
+def test_kill_switch():
+    """AFLP_DISABLE=1 must force every fast plugin to the stock path.
+
+    The playbook asserts results are correct but carry no fast-path marker; the
+    summary callback (enabled globally) should therefore report only fallbacks.
+    """
+    result = _run(os.path.join(PLAYBOOK_DIR, 'test_kill_switch.yml'),
+                  env={'AFLP_DISABLE': '1'})
+    _assert_playbook(result)
+    assert 'AFLP FAST-PATH SUMMARY' in result.stdout
+    import re
+    for action in ('copy', 'stat', 'lineinfile'):
+        m = re.search(rf'^\s*{action}\s+fast=(\d+)\s+fallback=(\d+)', result.stdout, re.M)
+        assert m and int(m.group(1)) == 0 and int(m.group(2)) >= 1, (
+            f'{action} should be all-fallback under AFLP_DISABLE\n{result.stdout}')
+
+
+@pytest.mark.integration
+def test_fast_path_summary():
+    """The aflp_fast_path_summary callback must print a per-action tally.
+
+    The playbook runs several fast tasks plus one lineinfile forced down the
+    fallback (mode arg); the summary must show the fallback in the lineinfile row.
+    """
+    import re
+
+    result = _run(os.path.join(PLAYBOOK_DIR, 'test_fast_path_summary.yml'))
+    _assert_playbook(result)
+    out = result.stdout
+    assert 'AFLP FAST-PATH SUMMARY' in out, f'summary banner missing\n{out}'
+
+    def _counts(action):
+        m = re.search(rf'^\s*{action}\s+fast=(\d+)\s+fallback=(\d+)', out, re.M)
+        assert m, f'no summary row for {action}\n{out}'
+        return int(m.group(1)), int(m.group(2))
+
+    copy_fast, copy_fb = _counts('copy')
+    line_fast, line_fb = _counts('lineinfile')
+    assert copy_fast >= 1 and copy_fb == 0, out
+    # one lineinfile ran fast (plain) and one fell back (mode arg)
+    assert line_fast >= 1 and line_fb >= 1, out
 
 
 @pytest.mark.integration

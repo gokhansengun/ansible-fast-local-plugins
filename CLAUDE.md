@@ -21,6 +21,10 @@ if not _is_local(conn) or self._play_context.become:
 
 `_is_local()` is in `_action_utils.py`. It checks `connection.transport`, `connection._load_name`, and `type(connection).__module__`. Setting `conn.transport = 'local'` in tests is sufficient to trigger the fast path.
 
+### Global kill-switch (`AFLP_DISABLE`)
+
+`_is_local()` first consults `_fast_disabled()` (also in `_action_utils.py`), which returns True when the `AFLP_DISABLE` env var is truthy (`1`/`true`/`yes`/`on`). When set, `_is_local()` returns False for *every* connection, so all 8 standalone plugins delegate to stock — an operator can turn the whole fast path off (debugging "is a fast plugin the culprit?", or A/B parity checks) without touching config or playbooks. The env is read at gate time, so it can change between runs. The three self-contained `kubernetes.core` overrides can't import `_action_utils`, so each carries the same inline `AFLP_DISABLE` check at the top of its own `_is_local()` — keep those in sync with the shared one. Because the fast path never runs under the switch, results are unmarked, so the summary callback reports `fast=0 fallback=N` (a built-in confirmation the switch took effect).
+
 ### Atomic writes
 
 `atomic_write()` in `_action_utils.py` writes to a same-directory temp file then `shutil.move()`s it. Used by `copy.py` and `template.py`.
@@ -40,6 +44,12 @@ Local action plugins live in the *legacy* namespace, so bare `template:` and `an
 `ansible/plugins/callback_plugins/aflp_builtin_redirect.py` wraps `ansible.plugins.loader.action_loader.get` so that `ansible.builtin.<name>` becomes `ansible.legacy.<name>` whenever a `<name>.py` exists in the `action_plugins` path. It is enabled via `callback_plugins` in `ansible.cfg` and auto-loads (`CALLBACK_NEEDS_ENABLED = False`); `load_callbacks()` runs before the worker fork, so the patch is inherited by every task worker. Overrides are auto-discovered — adding a new action plugin needs no change here. The patch is **fail-open**: any error installing it or rewriting a name falls back to stock behaviour.
 
 > Why a callback and not a strategy plugin: custom strategy plugins (the other interception point) are deprecated in ansible-core 2.19 and slated for removal (~2.21) — see ansible/ansible#84725. The patched symbol (`action_loader.get`) is verified against the 2.19 / 2.20 matrix; re-check on a matrix bump.
+
+### Fast-path summary callback (`aflp_fast_path_summary`)
+
+`ansible/plugins/callback_plugins/aflp_fast_path_summary.py` tallies, per action, fast (in-process) vs fallback (stock) results — classified by the `__produced_by_fast_plugin` marker — and prints a table at `v2_playbook_on_stats`. It exists to surface *silent* fallbacks (a task that should be fast but hit become / non-local / an unsupported arg). Unlike the redirect callback it is **opt-in** (`CALLBACK_NEEDS_ENABLED = True`), enabled via `callbacks_enabled = aflp_fast_path_summary` in `ansible.cfg` — the convention for informational callbacks (profile_tasks/timer). It discovers which actions to report the same way the redirect callback does (sibling `action_plugins` dir + config paths), counts loop results per item (skipped items excluded), ignores failures/skips (the marker is absent on failures regardless of path), and is fail-open.
+
+> Gotcha: because this callback is *enabled*, ansible parses its `DOCUMENTATION` block as YAML at load. A bare `: ` (colon-space) inside prose there aborts the **whole run** with a YAML scan error pointing at a `<unicode string>` — not at your playbook. Keep colons out of description/notes text (the redirect callback, being auto-loaded but never doc-parsed the same way, was less sensitive). The fast-path tests catch this.
 
 ---
 

@@ -50,6 +50,49 @@ Every successful fast (in-process) result carries the key `__produced_by_fast_pl
     that: "r['__produced_by_fast_plugin'] | default(false)"
 ```
 
+### Seeing fast-path vs fallback across a whole run
+
+The bundled `aflp_fast_path_summary` callback tallies, per action, how many task
+results came from a fast in-process plugin versus the stock fallback, and prints a
+table when the play finishes. It makes *silent* fallbacks visible — a task you
+expected to run fast but which hit `become`, a non-local connection or an
+unsupported argument shows up in the `fallback` column. Enable it in `ansible.cfg`:
+
+```ini
+[defaults]
+callback_plugins  = ./ansible/plugins/callback_plugins
+callbacks_enabled = aflp_fast_path_summary
+```
+
+```
+AFLP FAST-PATH SUMMARY *********************************************************
+  copy               fast=142    fallback=0
+  lineinfile         fast=15     fallback=1        <- fell back to stock
+  template           fast=88     fallback=0
+  uri                fast=30     fallback=2        <- fell back to stock
+  TOTAL              fast=275    fallback=3
+```
+
+Only actions that have a local override are listed (unrelated tasks like `debug`
+or `set_fact` are ignored), looped tasks are counted per item, and it is fail-open
+and read-only — it never alters a result or breaks a run.
+
+### Disabling the fast path (kill-switch)
+
+Set `AFLP_DISABLE` to a truthy value (`1`, `true`, `yes`, `on`) to force **every**
+fast plugin to fall back to stock ansible-core for that run — no edits to
+`ansible.cfg`, roles or playbooks. The controller then behaves exactly as if the
+fast plugins were not installed.
+
+```bash
+AFLP_DISABLE=1 ansible-playbook site.yml
+```
+
+This is the quickest way to answer "is a fast plugin causing this?" — flip it and
+re-run; if the symptom disappears, a fast plugin is implicated. It also pairs with
+the summary callback above (everything shows up as `fallback`) and is handy for
+A/B correctness checks. The variable is read per task, so it can vary between runs.
+
 ## Plugins
 
 | Plugin | Fast-path behaviour | Fallback trigger |
@@ -181,7 +224,8 @@ ansible/
       shell.py
       hashivault_read.py
       find_next_helm_release_number.py
-    callback_plugins/     # aflp_builtin_redirect: optional ansible.builtin.* -> fast routing
+    callback_plugins/     # aflp_builtin_redirect (ansible.builtin.* -> fast routing)
+                          # aflp_fast_path_summary (per-action fast/fallback tally)
   collections/            # FQCN collection overrides (e.g. kubernetes.core)
     ansible_collections/
 

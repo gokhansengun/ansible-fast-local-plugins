@@ -1,0 +1,68 @@
+---
+# Run this playbook with AFLP_DISABLE=1 in the environment. Every task below
+# uses a fast-overridden module, but with the kill-switch set they must all
+# delegate to stock ansible-core: behaviour stays correct, yet no result carries
+# the __produced_by_fast_plugin marker.
+- name: Verify the AFLP_DISABLE kill-switch forces the stock path
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_test_kill_switch
+
+  tasks:
+    - name: Create work directory
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    - name: Write a file (copy)
+      copy:
+        content: "hello"
+        dest: "{{ work_dir }}/f"
+      register: r_copy
+
+    - name: Copy worked but is NOT marked
+      assert:
+        that:
+          - r_copy.changed
+          - "'__produced_by_fast_plugin' not in r_copy"
+        fail_msg: "copy was handled by the fast plugin despite AFLP_DISABLE=1"
+
+    - name: Stat the file (stat)
+      stat:
+        path: "{{ work_dir }}/f"
+      register: r_stat
+
+    - name: Stat worked but is NOT marked
+      assert:
+        that:
+          - r_stat.stat.exists
+          - "'__produced_by_fast_plugin' not in r_stat"
+
+    - name: Edit the file (lineinfile)
+      lineinfile:
+        path: "{{ work_dir }}/f"
+        line: "added"
+      register: r_line
+
+    - name: Lineinfile worked but is NOT marked
+      assert:
+        that:
+          - r_line.changed
+          - "'__produced_by_fast_plugin' not in r_line"
+
+    - name: Read the file (slurp)
+      slurp:
+        src: "{{ work_dir }}/f"
+      register: r_slurp
+
+    - name: Slurp worked but is NOT marked
+      assert:
+        that:
+          - (r_slurp.content | b64decode) == 'hello\nadded\n'
+          - "'__produced_by_fast_plugin' not in r_slurp"
+
+    - name: Cleanup
+      file:
+        path: "{{ work_dir }}"
+        state: absent
