@@ -28,17 +28,43 @@ collections_path = ./ansible/collections
 > action_plugins = ./my/existing/plugins:./ansible/plugins/action_plugins
 > ```
 
+### Optional: route `ansible.builtin.*` names to the fast plugins
+
+The overrides above activate for the bare short name (`template:`) and for `ansible.legacy.template:`, but **not** for the fully-qualified `ansible.builtin.template:` — that FQCN is hard-bound to stock ansible-core. If your roles use `ansible.builtin.*` names and you cannot edit them, enable the bundled callback plugin to transparently redirect them to the fast plugins:
+
+```ini
+[defaults]
+callback_plugins = ./ansible/plugins/callback_plugins
+```
+
+It auto-loads (no `callbacks_enabled` entry needed) and, on startup, rewrites `ansible.builtin.<name>` to `ansible.legacy.<name>` for any name you have a local override of. Builtins you have **not** overridden (`debug`, `set_fact`, …) are untouched, and it fails open if a future ansible-core changes the internals it patches. (This replaces a strategy-plugin approach, which ansible-core 2.19 deprecates and ~2.21 removes.)
+
+### Confirming the fast path ran
+
+Every successful fast (in-process) result carries the key `__produced_by_fast_plugin: true`; the standard fallback result never does. Read it in a playbook via subscript (dotted access to `_`-prefixed keys is blocked by templating):
+
+```yaml
+- template: { src: x.j2, dest: /tmp/x }
+  register: r
+- assert:
+    that: "r['__produced_by_fast_plugin'] | default(false)"
+```
+
 ## Plugins
 
 | Plugin | Fast-path behaviour | Fallback trigger |
 |---|---|---|
 | `stat` | `os.stat()` in-process | non-local, `become` |
+| `file` | `os`/`shutil` filesystem ops in-process | non-local, `become`, check-mode, `access_time`/`modification_time` |
 | `tempfile` | `tempfile.mkstemp/mkdtemp` in-process | non-local, `become`, check-mode |
 | `copy` | atomic write via `shutil.move` | non-local, `src`-based copy, `become`, unsupported args |
 | `template` | Jinja2 rendering via `ansible.template.Templar` | non-local, `become`, unsupported args |
+| `command` | `subprocess.run` (no shell) | non-local, `become`, async, `environment` vars, check-mode |
 | `shell` | `subprocess.run` (no Ansible module overhead) | non-local, `become`, async, `environment` vars, check-mode |
 | `hashivault_read` | `hvac.Client` in-process | non-local |
 | `find_next_helm_release_number` | `kubectl get secrets` via subprocess | non-local |
+
+The `kubernetes.core` collection overrides (`k8s`, `k8s_info`, `helm_repository`) follow the same pattern via `kubectl`/`helm`, delegating to the genuine collection when non-local.
 
 ## Prerequisites
 
@@ -90,14 +116,17 @@ make shell PAIR=3.14:2.20.5:5.6.0
 ansible/
   plugins/
     action_plugins/       # Short-name action plugin overrides (production code)
-      _action_utils.py    # Shared helpers: _is_local(), atomic_write(), _parse_mode()
+      _action_utils.py    # Shared helpers: _is_local(), atomic_write(), mark_fast_result()
       stat.py
+      file.py
       tempfile.py
       copy.py
       template.py
+      command.py
       shell.py
       hashivault_read.py
       find_next_helm_release_number.py
+    callback_plugins/     # aflp_builtin_redirect: optional ansible.builtin.* -> fast routing
   collections/            # FQCN collection overrides (e.g. kubernetes.core)
     ansible_collections/
 
@@ -118,7 +147,7 @@ docker/
   ssh-target/             # openssh-server container for fallback tests
   kind-setup/             # Bootstraps a kind cluster inside DinD; seeds Helm secrets
 
-ansible.cfg               # Sets action_plugins path, disables host_key_checking
+ansible.cfg               # Sets action_plugins + callback_plugins paths, disables host_key_checking
 Makefile
 pyproject.toml
 .github/workflows/ci.yml
