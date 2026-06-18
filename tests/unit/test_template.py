@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), '../../ansible/plugins/action_plugins')
 ))
 
-from tests.conftest import make_action, mock_builtin_run
+from tests.conftest import FAST_PLUGIN_MARKER, make_action, mock_builtin_run
 
 
 def _make_template_action(tmp_path, template_content, dest_name='out.txt',
@@ -77,6 +77,17 @@ class TestTemplateFastPath:
         result = action.run(task_vars={})
         assert result.get('failed') is True
 
+    def test_fast_path_sets_marker(self, tmp_path):
+        action, dest = _make_template_action(tmp_path, 'Hello {{ name }}!')
+        result = action.run(task_vars={'name': 'World'})
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_fast_path_failure_is_unmarked(self, tmp_path):
+        action = make_action('template', {'dest': str(tmp_path / 'out.txt')})  # no src
+        result = action.run(task_vars={})
+        assert result.get('failed') is True
+        assert FAST_PLUGIN_MARKER not in result
+
     def test_jinja2_import_macros(self, tmp_path):
         (tmp_path / 'macros.j2').write_text(
             "{% macro greet(name) %}Hello, {{ name }}!{% endmacro %}"
@@ -120,3 +131,9 @@ class TestTemplateFallback:
         with mock_builtin_run('template', {'changed': True}) as mock:
             action.run(task_vars={})
         mock.assert_called_once()
+
+    def test_fallback_result_is_unmarked(self, tmp_path):
+        action, dest = _make_template_action(tmp_path, 'x', local=False)
+        with mock_builtin_run('template', {'changed': True}):
+            result = action.run(task_vars={})
+        assert FAST_PLUGIN_MARKER not in result

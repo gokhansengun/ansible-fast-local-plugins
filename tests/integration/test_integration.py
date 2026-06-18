@@ -71,6 +71,17 @@ def test_template():
 
 
 @pytest.mark.integration
+def test_builtin_fqcn_redirect():
+    """ansible.builtin.<name> must route to the fast local action plugins.
+
+    The aflp_builtin_redirect callback rewrites overridden ansible.builtin.*
+    names to ansible.legacy.* at loader resolution time; the playbook asserts
+    the fast plugin (not stock builtin) actually handled the task.
+    """
+    _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_builtin_fqcn_redirect.yml')))
+
+
+@pytest.mark.integration
 def test_hashivault_read():
     vault_addr = os.environ.get('VAULT_ADDR', 'http://vault:8200')
     vault_token = os.environ.get('VAULT_TOKEN', 'root')

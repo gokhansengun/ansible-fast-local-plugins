@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), '../../ansible/plugins/action_plugins')
 ))
 
-from tests.conftest import make_action
+from tests.conftest import FAST_PLUGIN_MARKER, make_action
 
 
 class TestStatFastPath:
@@ -73,6 +73,25 @@ class TestStatFastPath:
         result = action.run(task_vars={})
         assert result.get('failed') is True
 
+    def test_fast_path_sets_marker(self, tmp_path):
+        f = tmp_path / 'hello.txt'
+        f.write_text('hi')
+        action = make_action('stat', {'path': str(f)})
+        result = action.run(task_vars={})
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_missing_file_result_is_marked(self, tmp_path):
+        action = make_action('stat', {'path': str(tmp_path / 'missing.txt')})
+        result = action.run(task_vars={})
+        assert result['stat']['exists'] is False
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_fast_path_failure_is_unmarked(self):
+        action = make_action('stat', {})  # no path -> failure
+        result = action.run(task_vars={})
+        assert result.get('failed') is True
+        assert FAST_PLUGIN_MARKER not in result
+
     def test_permission_bits_present(self, tmp_path):
         f = tmp_path / 'bits.txt'
         f.write_text('x')
@@ -113,3 +132,11 @@ class TestStatFallback:
         with patch.object(action, '_execute_module', return_value={'stat': {'exists': True}}) as mock_exec:
             action.run(task_vars={})
         mock_exec.assert_called_once()
+
+    def test_fallback_result_is_unmarked(self, tmp_path):
+        f = tmp_path / 'x.txt'
+        f.write_text('x')
+        action = make_action('stat', {'path': str(f)}, local=False)
+        with patch.object(action, '_execute_module', return_value={'stat': {'exists': True}}):
+            result = action.run(task_vars={})
+        assert FAST_PLUGIN_MARKER not in result

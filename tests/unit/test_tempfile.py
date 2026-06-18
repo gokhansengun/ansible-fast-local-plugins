@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), '../../ansible/plugins/action_plugins')
 ))
 
-from tests.conftest import make_action
+from tests.conftest import FAST_PLUGIN_MARKER, make_action
 
 
 class TestTempfileFastPath:
@@ -55,6 +55,18 @@ class TestTempfileFastPath:
         result = action.run(task_vars={})
         assert result.get('failed') is True
 
+    def test_fast_path_sets_marker(self, tmp_path):
+        action = make_action('tempfile', {'state': 'file', 'path': str(tmp_path)})
+        result = action.run(task_vars={})
+        assert result[FAST_PLUGIN_MARKER] is True
+        os.unlink(result['path'])
+
+    def test_fast_path_failure_is_unmarked(self):
+        action = make_action('tempfile', {'state': 'file', 'path': '/nonexistent/dir/that/cannot/exist'})
+        result = action.run(task_vars={})
+        assert result.get('failed') is True
+        assert FAST_PLUGIN_MARKER not in result
+
 
 class TestTempfileFallback:
     def test_delegates_for_non_local(self):
@@ -74,3 +86,9 @@ class TestTempfileFallback:
         with patch.object(action, '_execute_module', return_value={'changed': False}) as mock:
             action.run(task_vars={})
         mock.assert_called_once()
+
+    def test_fallback_result_is_unmarked(self):
+        action = make_action('tempfile', {'state': 'file'}, local=False)
+        with patch.object(action, '_execute_module', return_value={'changed': True, 'path': '/tmp/x'}):
+            result = action.run(task_vars={})
+        assert FAST_PLUGIN_MARKER not in result

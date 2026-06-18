@@ -19,6 +19,7 @@
         that:
           - not r_pods.failed | default(false)
           - not r_pods.changed
+          - r_pods['__produced_by_fast_plugin'] | default(false)
 
     - name: Assert resources is a list
       assert:

@@ -29,6 +29,18 @@ if not _is_local(conn) or self._play_context.become:
 
 `copy.py` and `template.py` instantiate the standard action plugin class directly (`from ansible.plugins.action.copy import ActionModule as _Standard`). `stat.py`, `tempfile.py`, `hashivault_read.py`, and `find_next_helm_release_number.py` call `self._execute_module()`.
 
+### Fast-path marker
+
+Every plugin stamps a successful in-process result with `__produced_by_fast_plugin: True` so tests can prove the fast path ran rather than the standard fallback (whose result never carries it). The standalone plugins import `mark_fast_result` / `FAST_PLUGIN_MARKER` from `_action_utils.py`; the three `kubernetes.core` overrides define a local `mark_fast_result` (they must stay self-contained — they shadow a real collection and cannot import `_action_utils`). The marker is applied centrally: each `run()` resolves the fallback/delegate gate, then returns `mark_fast_result(self._run_local(...))`. Only non-failed dicts are marked (`setdefault`, so an explicit value is never clobbered), so failures and delegated results stay unmarked. ansible-core only strips `_ansible_`-prefixed keys, so the marker survives into the registered result; read it in playbooks via subscript (`r['__produced_by_fast_plugin']`), not dotted access, which the templating sandbox blocks for `_`-prefixed names.
+
+### FQCN redirect (`ansible.builtin.*` → fast plugins)
+
+Local action plugins live in the *legacy* namespace, so bare `template:` and `ansible.legacy.template:` hit the fast plugin, but `ansible.builtin.template:` does **not** (that FQCN is hard-bound to stock ansible-core). To let role authors keep `ansible.builtin.*` names and still get the fast path *without editing roles*, a callback plugin rewrites the name at resolution time.
+
+`ansible/plugins/callback_plugins/aflp_builtin_redirect.py` wraps `ansible.plugins.loader.action_loader.get` so that `ansible.builtin.<name>` becomes `ansible.legacy.<name>` whenever a `<name>.py` exists in the `action_plugins` path. It is enabled via `callback_plugins` in `ansible.cfg` and auto-loads (`CALLBACK_NEEDS_ENABLED = False`); `load_callbacks()` runs before the worker fork, so the patch is inherited by every task worker. Overrides are auto-discovered — adding a new action plugin needs no change here. The patch is **fail-open**: any error installing it or rewriting a name falls back to stock behaviour.
+
+> Why a callback and not a strategy plugin: custom strategy plugins (the other interception point) are deprecated in ansible-core 2.19 and slated for removal (~2.21) — see ansible/ansible#84725. The patched symbol (`action_loader.get`) is verified against the 2.19 / 2.20 matrix; re-check on a matrix bump.
+
 ---
 
 ## Test architecture

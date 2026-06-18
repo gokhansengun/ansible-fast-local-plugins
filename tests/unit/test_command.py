@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), '../../ansible/plugins/action_plugins')
 ))
 
-from tests.conftest import make_action, mock_builtin_run
+from tests.conftest import FAST_PLUGIN_MARKER, make_action, mock_builtin_run
 
 
 class TestCommandFastPath:
@@ -107,6 +107,17 @@ class TestCommandFastPath:
         assert result.get('failed') is True
         assert 'error running command' in result['msg']
 
+    def test_fast_path_sets_marker(self):
+        action = make_action('command', {'_raw_params': 'echo hi'})
+        result = action.run(task_vars={})
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_fast_path_failure_is_unmarked(self):
+        action = make_action('command', {})  # no command -> fast-path failure
+        result = action.run(task_vars={})
+        assert result.get('failed') is True
+        assert FAST_PLUGIN_MARKER not in result
+
 
 class TestCommandFallback:
     def test_delegates_for_non_local(self):
@@ -139,3 +150,10 @@ class TestCommandFallback:
         with mock_builtin_run('command', {'rc': 0}) as mock:
             action.run(task_vars={})
         mock.assert_called_once()
+
+    def test_fallback_result_is_unmarked(self):
+        action = make_action('command', {'_raw_params': 'echo x'}, local=False)
+        with mock_builtin_run('command', {'rc': 0}) as mock:
+            result = action.run(task_vars={})
+        mock.assert_called_once()
+        assert FAST_PLUGIN_MARKER not in result

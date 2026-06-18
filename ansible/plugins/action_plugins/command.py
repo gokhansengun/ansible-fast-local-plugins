@@ -14,7 +14,7 @@ from ansible.utils.display import Display
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
-from _action_utils import _is_local, _load_builtin_action  # noqa: E402
+from _action_utils import _is_local, _load_builtin_action, mark_fast_result  # noqa: E402
 
 display = Display()
 
@@ -61,6 +61,9 @@ class ActionModule(ActionBase):
             )
             return std.run(task_vars=task_vars)
 
+        return mark_fast_result(self._run_local(args, result))
+
+    def _run_local(self, args, result):
         display.debug('fast_command: local connection, running in-process via subprocess')
 
         # argv takes precedence: it is already a pre-split list.

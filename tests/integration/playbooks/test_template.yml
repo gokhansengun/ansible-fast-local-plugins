@@ -24,6 +24,7 @@
         that:
           - r1.changed
           - r1.checksum is defined
+          - r1['__produced_by_fast_plugin'] | default(false)
 
     - name: Read rendered file
       shell:

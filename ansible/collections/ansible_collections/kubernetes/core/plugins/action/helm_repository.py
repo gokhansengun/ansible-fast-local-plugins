@@ -37,6 +37,14 @@ def _load_standard_action():
     return _Standard
 
 
+def mark_fast_result(result):
+    """Stamp a successful fast-path result so tests can confirm the in-process
+    override handled the task (the delegated fallback returns it absent)."""
+    if isinstance(result, dict) and not result.get('failed'):
+        result.setdefault('__produced_by_fast_plugin', True)
+    return result
+
+
 class ActionModule(ActionBase):
     TRANSFERS_FILES = False
     # Marks this class (and any separately-loaded copy of this file) as the
@@ -86,6 +94,9 @@ class ActionModule(ActionBase):
                 'connecting user instead of the become user'
             )
 
+        return mark_fast_result(self._run_local(args, result))
+
+    def _run_local(self, args, result):
         display.debug('fast_helm_repository: local connection, calling helm directly')
 
         name = args.get('name') or args.get('repo_name')

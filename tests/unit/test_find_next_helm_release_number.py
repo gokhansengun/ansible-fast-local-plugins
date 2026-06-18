@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.abspath(
 ))
 
 import find_next_helm_release_number as mod
-from tests.conftest import make_action
+from tests.conftest import FAST_PLUGIN_MARKER, make_action
 
 
 def _kubectl_result(versions):
@@ -110,6 +110,20 @@ class TestFindNextHelmReleaseNumberFastPath:
         assert isinstance(result.get('modified_at'), int)
         assert result['modified_at'] > 0
 
+    def test_fast_path_sets_marker(self):
+        action = make_action('find_next_helm_release_number', {
+            'release_name': 'r', 'namespace': 'ns',
+        })
+        with patch('subprocess.run', return_value=_kubectl_result([1])):
+            result = action.run(task_vars={})
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_fast_path_failure_is_unmarked(self):
+        action = make_action('find_next_helm_release_number', {'namespace': 'ns'})  # no release_name
+        result = action.run(task_vars={})
+        assert result.get('failed') is True
+        assert FAST_PLUGIN_MARKER not in result
+
 
 class TestFindNextHelmFallback:
     def test_delegates_for_non_local(self):
@@ -120,3 +134,11 @@ class TestFindNextHelmFallback:
         with patch.object(action, '_execute_module', return_value={'changed': False}) as mock:
             action.run(task_vars={})
         mock.assert_called_once()
+
+    def test_fallback_result_is_unmarked(self):
+        action = make_action('find_next_helm_release_number', {
+            'release_name': 'r', 'namespace': 'ns',
+        }, local=False)
+        with patch.object(action, '_execute_module', return_value={'changed': False}):
+            result = action.run(task_vars={})
+        assert FAST_PLUGIN_MARKER not in result

@@ -16,6 +16,7 @@
           - tf.changed
           - tf.state == 'file'
           - tf.path is defined
+          - tf['__produced_by_fast_plugin'] | default(false)
 
     - name: Verify temp file exists on disk
       stat:

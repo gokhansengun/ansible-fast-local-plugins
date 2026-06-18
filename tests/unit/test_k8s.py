@@ -31,6 +31,7 @@ _spec.loader.exec_module(_mod)
 
 from tests.conftest import (
     COLLECTION_PLUGIN_DIRS,
+    FAST_PLUGIN_MARKER,
     make_action,
     mock_collection_run,
     shadow_collection_import,
@@ -385,6 +386,27 @@ class TestK8sFastPathPresent:
         assert not result.get('failed'), result
         assert result['changed'] is False
 
+    def test_fast_path_sets_marker(self):
+        action = _action({'kind': 'ConfigMap', 'name': 'cm', 'namespace': 'default',
+                          'definition': _obj()})
+        with patch('subprocess.run', side_effect=[_proc(1), self._apply_result()]):
+            result = action.run(task_vars={})
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_noop_result_is_marked(self):
+        action = _action({'kind': 'ConfigMap', 'name': 'cm', 'namespace': 'default',
+                          'definition': _obj()})
+        with patch('subprocess.run', return_value=_proc(0)):
+            result = action.run(task_vars={})
+        assert result['changed'] is False
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_fast_path_failure_is_unmarked(self):
+        action = _action({'namespace': 'default'})  # no definition/src/kind -> failure
+        result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert FAST_PLUGIN_MARKER not in result
+
     def test_applies_when_diff_fails(self):
         """A diff error (rc=2, permission denied etc.) should not abort — assume changes."""
         action = _action({'kind': 'ConfigMap', 'name': 'cm', 'namespace': 'default',
@@ -708,6 +730,18 @@ class TestK8sFallback:
         with mock_collection_run(FQCN, {'changed': True, 'result': {}}) as mock:
             action.run(task_vars={})
         mock.assert_called_once()
+
+    def test_fallback_result_is_unmarked(self):
+        action = _action({'definition': _obj()}, local=False)
+        with mock_collection_run(FQCN, {'changed': False, 'result': {}}):
+            result = action.run(task_vars={})
+        assert FAST_PLUGIN_MARKER not in result
+
+    def test_wait_delegation_result_is_unmarked(self):
+        action = _action({'definition': _obj(), 'wait': True})
+        with mock_collection_run(FQCN, {'changed': False, 'result': {}}):
+            result = action.run(task_vars={})
+        assert FAST_PLUGIN_MARKER not in result
 
 
 # ------------------------------------------------------------------ #

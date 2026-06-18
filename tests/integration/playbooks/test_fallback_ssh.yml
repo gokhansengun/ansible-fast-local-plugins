@@ -24,6 +24,8 @@
         that:
           - s.stat.exists
           - s.stat.isreg
+          # Fallback (over SSH) ran the standard module, so the marker is absent.
+          - "'__produced_by_fast_plugin' not in s"
 
     # --- tempfile fallback ---
     - name: Create temp file via SSH
@@ -49,6 +51,7 @@
       assert:
         that:
           - cp.changed
+          - "'__produced_by_fast_plugin' not in cp"
 
     - name: Copy same content again (idempotency via SSH)
       copy:
@@ -72,6 +75,7 @@
         that:
           - sh.stdout == 'ssh_hello'
           - sh.rc == 0
+          - "'__produced_by_fast_plugin' not in sh"
 
     # --- template fallback ---
     - name: Render template via SSH
@@ -86,6 +90,7 @@
       assert:
         that:
           - tmpl.changed
+          - "'__produced_by_fast_plugin' not in tmpl"
 
     - name: Read rendered file via SSH
       shell:

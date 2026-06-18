@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath(
 
 from tests.conftest import (
     COLLECTION_PLUGIN_DIRS,
+    FAST_PLUGIN_MARKER,
     _load_plugin,
     make_action,
     mock_collection_run,
@@ -120,6 +121,21 @@ class TestHelmRepositoryFastPath:
         action.run(task_vars={})
         assert '--ca-file' in received.read_text()
 
+    def test_fast_path_sets_marker(self, tmp_path):
+        fake_helm = tmp_path / 'helm'
+        fake_helm.write_text('#!/bin/sh\nexit 0\n')
+        fake_helm.chmod(0o755)
+        action = _action({'name': 'myrepo', 'repo_url': 'https://example.com/charts',
+                          'binary_path': str(fake_helm)})
+        result = action.run(task_vars={})
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_fast_path_failure_is_unmarked(self):
+        action = _action({'repo_url': 'https://example.com/charts'})  # no name -> failure
+        result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert FAST_PLUGIN_MARKER not in result
+
 
 class TestHelmRepositoryFallback:
     def test_delegates_for_non_local(self):
@@ -135,6 +151,13 @@ class TestHelmRepositoryFallback:
         with mock_collection_run(FQCN, {'changed': False, 'rc': 0}) as mock:
             action.run(task_vars={})
         mock.assert_called_once()
+
+    def test_fallback_result_is_unmarked(self):
+        action = _action({'name': 'myrepo', 'repo_url': 'https://example.com/charts'},
+                         local=False)
+        with mock_collection_run(FQCN, {'changed': False, 'rc': 0}):
+            result = action.run(task_vars={})
+        assert FAST_PLUGIN_MARKER not in result
 
 
 # ------------------------------------------------------------------ #

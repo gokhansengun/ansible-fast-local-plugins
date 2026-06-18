@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), '../../ansible/plugins/action_plugins')
 ))
 
-from tests.conftest import make_action
+from tests.conftest import FAST_PLUGIN_MARKER, make_action
 
 
 def _kv1_response(data):
@@ -157,6 +157,24 @@ class TestHashivaultReadFastPath:
         assert captured['url'] == 'http://envvault:8200'
         assert captured['token'] == 'envtoken'
 
+    def test_fast_path_sets_marker(self):
+        action = make_action('hashivault_read', {
+            'url': 'http://vault:8200', 'token': 'root',
+            'secret': 'test/mysecret', 'version': 1,
+        })
+        mock_client = MagicMock()
+        mock_client.secrets.kv.v1.read_secret.return_value = _kv1_response({'k': 'v'})
+        with patch('hvac.Client', return_value=mock_client):
+            result = action.run(task_vars={})
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_fast_path_failure_is_unmarked(self):
+        action = make_action('hashivault_read', {'url': 'http://vault:8200', 'token': 'root'})
+        with patch('hvac.Client', return_value=MagicMock()):
+            result = action.run(task_vars={})  # missing secret -> failure
+        assert result.get('failed') is True
+        assert FAST_PLUGIN_MARKER not in result
+
 
 class TestHashivaultReadFallback:
     def test_delegates_for_non_local(self):
@@ -168,3 +186,11 @@ class TestHashivaultReadFallback:
         with patch.object(action, '_execute_module', return_value={'changed': False}) as mock:
             action.run(task_vars={})
         mock.assert_called_once()
+
+    def test_fallback_result_is_unmarked(self):
+        action = make_action('hashivault_read', {
+            'url': 'http://vault:8200', 'token': 'root', 'secret': 'x',
+        }, local=False)
+        with patch.object(action, '_execute_module', return_value={'changed': False}):
+            result = action.run(task_vars={})
+        assert FAST_PLUGIN_MARKER not in result

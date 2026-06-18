@@ -33,6 +33,7 @@
           - s.stat.size == 11
           - s.stat.checksum is defined
           - s.stat.mode == '0644'
+          - s['__produced_by_fast_plugin'] | default(false)
           - s.stat.pw_name is defined
           - s.stat.gr_name is defined
           - not s.changed

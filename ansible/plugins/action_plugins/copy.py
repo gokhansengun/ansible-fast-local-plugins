@@ -13,7 +13,7 @@ from ansible.utils.display import Display
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
-from _action_utils import _is_local, atomic_write, _load_builtin_action  # noqa: E402
+from _action_utils import _is_local, atomic_write, _load_builtin_action, mark_fast_result  # noqa: E402
 
 display = Display()
 
@@ -67,6 +67,9 @@ class ActionModule(ActionBase):
             )
             return std.run(task_vars=task_vars)
 
+        return mark_fast_result(self._run_local(args))
+
+    def _run_local(self, args):
         display.debug('fast_copy: local + content path, using in-process write')
 
         dest = args.get('dest')

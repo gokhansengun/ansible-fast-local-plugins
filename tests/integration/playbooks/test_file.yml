@@ -30,6 +30,7 @@
       assert:
         that:
           - r_mkdir.changed
+          - r_mkdir['__produced_by_fast_plugin'] | default(false)
 
     - name: Create same directory again (idempotency)
       file:

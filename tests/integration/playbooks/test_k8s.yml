@@ -41,6 +41,7 @@
         that:
           - not r_create.failed | default(false)
           - r_create.changed
+          - r_create['__produced_by_fast_plugin'] | default(false)
 
     # ------------------------------------------------------------------ #
     # state: present – idempotency                                        #

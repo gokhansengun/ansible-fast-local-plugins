@@ -22,6 +22,7 @@
           - kv1.value.password == 's3cr3t'
           - not kv1.changed
           - kv1.rc == 0
+          - kv1['__produced_by_fast_plugin'] | default(false)
 
     # --- KV v1 key extraction ---
     - name: Read KV v1 specific key

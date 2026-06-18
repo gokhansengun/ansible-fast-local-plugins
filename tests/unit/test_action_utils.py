@@ -85,6 +85,40 @@ class TestParseMode:
 
 
 # ---------------------------------------------------------------------------
+# mark_fast_result
+# ---------------------------------------------------------------------------
+
+class TestMarkFastResult:
+    def test_marks_successful_dict(self):
+        result = utils.mark_fast_result({'changed': True})
+        assert result[utils.FAST_PLUGIN_MARKER] is True
+
+    def test_marks_changed_false_dict(self):
+        # Idempotent (changed=False) success results are still marked.
+        result = utils.mark_fast_result({'changed': False})
+        assert result[utils.FAST_PLUGIN_MARKER] is True
+
+    def test_does_not_mark_failed_dict(self):
+        result = utils.mark_fast_result({'failed': True, 'msg': 'boom'})
+        assert utils.FAST_PLUGIN_MARKER not in result
+
+    def test_returns_same_object(self):
+        d = {'changed': True}
+        assert utils.mark_fast_result(d) is d
+
+    def test_does_not_clobber_existing_marker(self):
+        result = utils.mark_fast_result({'changed': True, utils.FAST_PLUGIN_MARKER: 'preset'})
+        assert result[utils.FAST_PLUGIN_MARKER] == 'preset'
+
+    def test_non_dict_passes_through(self):
+        assert utils.mark_fast_result(None) is None
+        assert utils.mark_fast_result('x') == 'x'
+
+    def test_marker_key_name(self):
+        assert utils.FAST_PLUGIN_MARKER == '__produced_by_fast_plugin'
+
+
+# ---------------------------------------------------------------------------
 # atomic_write
 # ---------------------------------------------------------------------------
 

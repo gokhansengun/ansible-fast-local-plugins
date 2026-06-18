@@ -22,6 +22,8 @@
         that:
           - r.stdout == 'hello'
           - r.changed
+          # Confirms the fast in-process plugin handled it (not the standard fallback).
+          - r['__produced_by_fast_plugin'] | default(false)
 
     # --- argv form ---
     - name: Run command via argv
@@ -87,6 +89,7 @@
       assert:
         that:
           - r_creates.skipped | default(false)
+          - r_creates['__produced_by_fast_plugin'] | default(false)
 
     # --- removes ---
     - name: Command with removes - should skip because file does not exist

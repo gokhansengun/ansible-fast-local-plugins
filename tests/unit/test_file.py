@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), '../../ansible/plugins/action_plugins')
 ))
 
-from tests.conftest import make_action
+from tests.conftest import FAST_PLUGIN_MARKER, make_action
 
 
 def _action(args, **kwargs):
@@ -311,3 +311,36 @@ class TestFileFallback:
         with patch.object(action, '_execute_module', return_value={'changed': True}) as mock:
             action.run(task_vars={})
         mock.assert_called_once()
+
+    def test_fallback_result_is_unmarked(self, tmp_path):
+        from unittest.mock import patch
+        action = _action({'path': str(tmp_path / 'x'), 'state': 'directory'}, local=False)
+        with patch.object(action, '_execute_module', return_value={'changed': False}):
+            result = action.run(task_vars={})
+        assert FAST_PLUGIN_MARKER not in result
+
+    def test_access_time_fallback_is_unmarked(self, tmp_path):
+        from unittest.mock import patch
+        action = _action({'path': str(tmp_path / 'x'), 'state': 'touch', 'access_time': 'now'})
+        with patch.object(action, '_execute_module', return_value={'changed': True}):
+            result = action.run(task_vars={})
+        assert FAST_PLUGIN_MARKER not in result
+
+
+# ------------------------------------------------------------------ #
+# fast-path marker                                                     #
+# ------------------------------------------------------------------ #
+class TestFileFastMarker:
+    def test_directory_success_is_marked(self, tmp_path):
+        result = _action({'path': str(tmp_path / 'd'), 'state': 'directory'}).run(task_vars={})
+        assert result['changed'] is True
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_touch_success_is_marked(self, tmp_path):
+        result = _action({'path': str(tmp_path / 'f'), 'state': 'touch'}).run(task_vars={})
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_fast_path_failure_is_unmarked(self):
+        result = _action({}).run(task_vars={})  # no path -> failure
+        assert result.get('failed') is True
+        assert FAST_PLUGIN_MARKER not in result

@@ -25,6 +25,7 @@ _spec.loader.exec_module(_mod)
 
 from tests.conftest import (
     COLLECTION_PLUGIN_DIRS,
+    FAST_PLUGIN_MARKER,
     make_action,
     mock_collection_run,
     shadow_collection_import,
@@ -209,6 +210,19 @@ class TestK8sInfoFastPath:
         cmd = mock_run.call_args[0][0]
         assert 'specific-pod' in cmd
 
+    def test_fast_path_sets_marker(self):
+        items = [{'kind': 'Pod', 'metadata': {'name': 'p1'}}]
+        action = _action({'kind': 'Pod', 'namespace': 'default'})
+        with patch('subprocess.run', return_value=_kubectl_list(items)):
+            result = action.run(task_vars={})
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_fast_path_failure_is_unmarked(self):
+        action = _action({'namespace': 'default'})  # no kind -> failure
+        result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert FAST_PLUGIN_MARKER not in result
+
 
 # ------------------------------------------------------------------ #
 # Fallback self-recursion (regression for 'maximum recursion depth     #
@@ -264,3 +278,9 @@ class TestK8sInfoFallback:
         with mock_collection_run(FQCN, {'changed': False, 'resources': []}) as mock:
             action.run(task_vars={})
         mock.assert_called_once()
+
+    def test_fallback_result_is_unmarked(self):
+        action = _action({'kind': 'Pod'}, local=False)
+        with mock_collection_run(FQCN, {'changed': False, 'resources': []}):
+            result = action.run(task_vars={})
+        assert FAST_PLUGIN_MARKER not in result

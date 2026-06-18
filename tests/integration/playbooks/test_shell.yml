@@ -23,6 +23,7 @@
           - r.stdout == 'hello'
           - r.rc == 0
           - r.changed
+          - r['__produced_by_fast_plugin'] | default(false)
 
     # --- failing command ---
     - name: Run failing command (ignore errors)

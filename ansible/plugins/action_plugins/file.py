@@ -16,7 +16,7 @@ from ansible.utils.display import Display
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
-from _action_utils import _is_local, _parse_mode  # noqa: E402
+from _action_utils import _is_local, _parse_mode, mark_fast_result  # noqa: E402
 
 display = Display()
 
@@ -109,6 +109,9 @@ class ActionModule(ActionBase):
             display.debug('fast_file: access_time/modification_time set, delegating')
             return self._execute_module(task_vars=task_vars, wrap_async=self._task.async_val)
 
+        return mark_fast_result(self._run_local(args, result))
+
+    def _run_local(self, args, result):
         path = args.get('path') or args.get('dest') or args.get('name')
         if not path:
             return dict(failed=True, msg='path is required')

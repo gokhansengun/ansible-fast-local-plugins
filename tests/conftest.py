@@ -9,6 +9,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# Key stamped onto every successful fast (in-process) result by the plugins.
+# Tests assert it is present on the fast path and absent on the fallback path.
+FAST_PLUGIN_MARKER = '__produced_by_fast_plugin'
+
 PLUGIN_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', 'ansible', 'plugins', 'action_plugins')
 )

@@ -86,6 +86,14 @@ def _kubectl_get(kind, api_version, name, namespace, label_selectors,
     return data.get('items', [data])
 
 
+def mark_fast_result(result):
+    """Stamp a successful fast-path result so tests can confirm the in-process
+    override handled the task (the delegated fallback returns it absent)."""
+    if isinstance(result, dict) and not result.get('failed'):
+        result.setdefault('__produced_by_fast_plugin', True)
+    return result
+
+
 class ActionModule(ActionBase):
     TRANSFERS_FILES = False
     # Marks this class (and any separately-loaded copy of this file) as the
@@ -135,6 +143,9 @@ class ActionModule(ActionBase):
                 'local kubectl fast path (become has no effect on API queries)'
             )
 
+        return mark_fast_result(self._run_local(args, result))
+
+    def _run_local(self, args, result):
         display.debug('fast_k8s_info: local connection, calling kubectl directly')
 
         kind = args.get('kind')

@@ -13,7 +13,7 @@ from ansible.utils.display import Display
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
-from _action_utils import _is_local  # noqa: E402
+from _action_utils import _is_local, mark_fast_result  # noqa: E402
 
 display = Display()
 
@@ -75,6 +75,9 @@ class ActionModule(ActionBase):
             display.debug('fast_find_next_helm_release_number: non-local, delegating to module')
             return self._execute_module(task_vars=task_vars, wrap_async=self._task.async_val)
 
+        return mark_fast_result(self._run_local(args, result))
+
+    def _run_local(self, args, result):
         display.debug('fast_find_next_helm_release_number: local connection, running in-process')
 
         release_name = args.get('release_name')

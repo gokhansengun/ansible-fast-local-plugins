@@ -9,6 +9,24 @@ import tempfile
 
 from ansible.module_utils._text import to_native
 
+# Result key stamped onto every successful fast (in-process) result so tests can
+# confirm the fast action plugin actually handled the task rather than the
+# standard fallback. ansible-core only strips keys prefixed '_ansible_', so this
+# survives into the registered result. The standard/fallback path never sets it.
+FAST_PLUGIN_MARKER = '__produced_by_fast_plugin'
+
+
+def mark_fast_result(result):
+    """Stamp a successful fast-path result dict with FAST_PLUGIN_MARKER.
+
+    Only non-failed dicts are marked: presence of the key means "the fast
+    in-process plugin produced this result". Failed results and non-dict values
+    pass through untouched, and setdefault avoids clobbering an explicit value.
+    """
+    if isinstance(result, dict) and not result.get('failed'):
+        result.setdefault(FAST_PLUGIN_MARKER, True)
+    return result
+
 
 def _load_builtin_action(plugin_name: str):
     """Load ansible's built-in action plugin from the installed package path.

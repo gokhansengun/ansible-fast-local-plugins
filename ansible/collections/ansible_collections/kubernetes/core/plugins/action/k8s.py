@@ -241,6 +241,14 @@ def _kubectl_patch(kind, api_version, name, namespace, patch_data, merge_type,
         raise RuntimeError('failed to parse kubectl patch output: %s' % to_native(e))
 
 
+def mark_fast_result(result):
+    """Stamp a successful fast-path result so tests can confirm the in-process
+    override handled the task (the delegated fallback returns it absent)."""
+    if isinstance(result, dict) and not result.get('failed'):
+        result.setdefault('__produced_by_fast_plugin', True)
+    return result
+
+
 class ActionModule(ActionBase):
     TRANSFERS_FILES = False
     # Marks this class (and any separately-loaded copy of this file) as the
@@ -317,6 +325,9 @@ class ActionModule(ActionBase):
                 ))
             return self._delegate(task_vars, _Standard)
 
+        return mark_fast_result(self._run_local(args, result))
+
+    def _run_local(self, args, result):
         display.debug('fast_k8s: local connection, calling kubectl directly')
 
         state = args.get('state', 'present')

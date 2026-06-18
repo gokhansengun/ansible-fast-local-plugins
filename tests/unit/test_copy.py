@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), '../../ansible/plugins/action_plugins')
 ))
 
-from tests.conftest import make_action, mock_builtin_run
+from tests.conftest import FAST_PLUGIN_MARKER, make_action, mock_builtin_run
 
 
 class TestCopyFastPath:
@@ -66,6 +66,26 @@ class TestCopyFastPath:
         result = action.run(task_vars={})
         assert result.get('failed') is True
 
+    def test_fast_path_sets_marker(self, tmp_path):
+        dest = str(tmp_path / 'out.txt')
+        action = make_action('copy', {'dest': dest, 'content': 'hello world'})
+        result = action.run(task_vars={})
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_idempotent_skip_is_marked(self, tmp_path):
+        dest = tmp_path / 'out.txt'
+        dest.write_text('same')
+        action = make_action('copy', {'dest': str(dest), 'content': 'same'})
+        result = action.run(task_vars={})
+        assert result['changed'] is False
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_fast_path_failure_is_unmarked(self):
+        action = make_action('copy', {'content': 'hello'})  # no dest -> failure
+        result = action.run(task_vars={})
+        assert result.get('failed') is True
+        assert FAST_PLUGIN_MARKER not in result
+
 
 class TestCopyFallback:
     def test_delegates_for_non_local(self, tmp_path):
@@ -97,3 +117,10 @@ class TestCopyFallback:
         with mock_builtin_run('copy', {'changed': True}) as mock:
             action.run(task_vars={})
         mock.assert_called_once()
+
+    def test_fallback_result_is_unmarked(self, tmp_path):
+        dest = str(tmp_path / 'out.txt')
+        action = make_action('copy', {'dest': dest, 'content': 'x'}, local=False)
+        with mock_builtin_run('copy', {'changed': True}):
+            result = action.run(task_vars={})
+        assert FAST_PLUGIN_MARKER not in result
