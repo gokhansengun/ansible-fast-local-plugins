@@ -5,7 +5,7 @@ import os
 import sys
 
 from ansible.errors import AnsibleError, AnsibleUndefinedVariable
-from ansible.module_utils._text import to_bytes, to_native, to_text
+from ansible.module_utils.common.text.converters import to_bytes, to_native, to_text
 from ansible.module_utils.parsing.convert_bool import boolean
 from ansible.plugins.action import ActionBase
 from ansible.template import generate_ansible_template_vars, trust_as_template
@@ -15,7 +15,7 @@ from ansible.utils.display import Display
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
-from _action_utils import _is_local, atomic_write, _load_builtin_action, mark_fast_result  # noqa: E402
+from _action_utils import _is_local, atomic_write, _load_builtin_action, mark_fast_result, strict_guard  # noqa: E402
 
 display = Display()
 
@@ -54,6 +54,7 @@ class ActionModule(ActionBase):
                 or self._play_context.check_mode or self._task.async_val
                 or any(args.get(key) for key in unsupported_args)):
             display.debug('fast_template: non-local connection, delegating to standard plugin')
+            strict_guard(conn, self._play_context, self._task)
             _Standard = _load_builtin_action('template').ActionModule
             std = _Standard(
                 self._task, conn, self._play_context,

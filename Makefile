@@ -1,5 +1,5 @@
 # Format: PYTHON_VERSION:ANSIBLE_CORE_VERSION:HASHIVAULT_MODULE_VERSION
-MATRIX := 3.12:2.19.3:5.4.0 3.14:2.20.5:5.6.0
+MATRIX := 3.14:2.20.5:5.6.0 3.12:2.19.3:5.4.0
 
 COMPOSE := docker compose -f docker/docker-compose.yml
 
@@ -9,7 +9,7 @@ _PY  = $(word 1,$(subst :, ,$(PAIR)))
 _AC  = $(word 2,$(subst :, ,$(PAIR)))
 _HV  = $(word 3,$(subst :, ,$(PAIR)))
 
-.PHONY: help build test test-unit test-int bench shell clean
+.PHONY: help build test test-unit test-int bench demo shell clean
 
 # Extra args forwarded to bench/benchmark.py, e.g. BENCH_ARGS='-n 500 -p copy,stat'
 BENCH_ARGS ?=
@@ -26,6 +26,7 @@ help:
 	@printf "  test-unit   Run unit tests only (no external services, uses --no-deps)\n"
 	@printf "  test-int    Run integration tests only (starts full Docker Compose stack)\n"
 	@printf "  bench       Benchmark fast plugins vs stock ansible-core (no external services)\n"
+	@printf "  demo        Tour the summary, AFLP_DISABLE/AFLP_STRICT env vars, and a mini benchmark\n"
 	@printf "  shell       Open a bash shell inside the controller container\n"
 	@printf "  clean       Tear down all Compose stacks and delete local build artifacts\n"
 	@printf "  help        Show this message\n"
@@ -37,9 +38,10 @@ help:
 	@printf "  make test                            # all pairs\n"
 	@printf "  make test MATRIX='3.12:2.19.3:5.4.0'  # one specific pair\n"
 	@printf "  make test-unit                       # fast, no Docker services\n"
-	@printf "  make shell PAIR=3.14:2.20.5:5.6.0   # drop into a specific image\n"
+	@printf "  make shell PAIR=3.12:2.19.3:5.4.0   # drop into a specific (non-default) image\n"
 	@printf "  make bench                           # default benchmark (PAIR image)\n"
 	@printf "  make bench BENCH_ARGS='-n 500 -p copy,stat'  # custom size/plugins\n"
+	@printf "  make demo                            # see the summary + AFLP_DISABLE contrast\n"
 
 build:
 	@$(call foreach_pair, \
@@ -105,6 +107,36 @@ bench:
 	PYTHON_VERSION=$(_PY) ANSIBLE_CORE_VERSION=$(_AC) HASHIVAULT_MODULE_VERSION=$(_HV) \
 		$(COMPOSE) run --rm --no-deps --entrypoint "" controller \
 		python bench/benchmark.py $(BENCH_ARGS)
+
+demo:
+	@printf "\n========================================================================\n"
+	@printf " Normal run — fast plugins active. Watch the per-action summary at the end\n"
+	@printf " (lineinfile shows one fallback: the mode arg forces the stock module).\n"
+	@printf "========================================================================\n"
+	PYTHON_VERSION=$(_PY) ANSIBLE_CORE_VERSION=$(_AC) HASHIVAULT_MODULE_VERSION=$(_HV) \
+		$(COMPOSE) run --rm --no-deps --entrypoint "" controller \
+		ansible-playbook -i tests/integration/inventory/local.ini bench/playbooks/demo.yml
+	@printf "\n========================================================================\n"
+	@printf " Same play with AFLP_DISABLE=1 — every task forced to stock ansible-core.\n"
+	@printf " The summary now reports fast=0 fallback=N for every action.\n"
+	@printf "========================================================================\n"
+	PYTHON_VERSION=$(_PY) ANSIBLE_CORE_VERSION=$(_AC) HASHIVAULT_MODULE_VERSION=$(_HV) \
+		$(COMPOSE) run --rm --no-deps -e AFLP_DISABLE=1 --entrypoint "" controller \
+		ansible-playbook -i tests/integration/inventory/local.ini bench/playbooks/demo.yml
+	@printf "\n========================================================================\n"
+	@printf " Same play with AFLP_STRICT=1 — fallbacks are forbidden. The run is\n"
+	@printf " EXPECTED to fail at the lineinfile-with-mode task (an unintended fallback).\n"
+	@printf "========================================================================\n"
+	@PYTHON_VERSION=$(_PY) ANSIBLE_CORE_VERSION=$(_AC) HASHIVAULT_MODULE_VERSION=$(_HV) \
+		$(COMPOSE) run --rm --no-deps -e AFLP_STRICT=1 --entrypoint "" controller \
+		ansible-playbook -i tests/integration/inventory/local.ini bench/playbooks/demo.yml \
+		|| printf "\n  ^ Expected: AFLP_STRICT refused the fallback task and failed the run.\n"
+	@printf "\n========================================================================\n"
+	@printf " And the payoff — fast vs stock ansible-core for copy and stat (50 iters):\n"
+	@printf "========================================================================\n"
+	PYTHON_VERSION=$(_PY) ANSIBLE_CORE_VERSION=$(_AC) HASHIVAULT_MODULE_VERSION=$(_HV) \
+		$(COMPOSE) run --rm --no-deps --entrypoint "" controller \
+		python bench/benchmark.py -n 50 -p copy,stat
 
 shell:
 	PYTHON_VERSION=$(_PY) ANSIBLE_CORE_VERSION=$(_AC) HASHIVAULT_MODULE_VERSION=$(_HV) \

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 
-from ansible.module_utils._text import to_bytes
+from ansible.module_utils.common.text.converters import to_bytes
 from ansible.module_utils.parsing.convert_bool import boolean
 from ansible.plugins.action import ActionBase
 from ansible.utils.display import Display
@@ -14,7 +14,7 @@ from ansible.utils.path import makedirs_safe
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
-from _action_utils import _is_local, _load_builtin_action, mark_fast_result  # noqa: E402
+from _action_utils import _is_local, _load_builtin_action, mark_fast_result, strict_guard  # noqa: E402
 
 display = Display()
 
@@ -51,6 +51,7 @@ class ActionModule(ActionBase):
         if (not _is_local(conn) or self._play_context.become
                 or self._play_context.check_mode):
             display.debug('fast_fetch: delegating to standard fetch action plugin')
+            strict_guard(conn, self._play_context, self._task)
             _Standard = _load_builtin_action('fetch').ActionModule
             std = _Standard(
                 self._task, conn, self._play_context,

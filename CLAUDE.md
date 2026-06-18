@@ -25,6 +25,10 @@ if not _is_local(conn) or self._play_context.become:
 
 `_is_local()` first consults `_fast_disabled()` (also in `_action_utils.py`), which returns True when the `AFLP_DISABLE` env var is truthy (`1`/`true`/`yes`/`on`). When set, `_is_local()` returns False for *every* connection, so all 8 standalone plugins delegate to stock — an operator can turn the whole fast path off (debugging "is a fast plugin the culprit?", or A/B parity checks) without touching config or playbooks. The env is read at gate time, so it can change between runs. The three self-contained `kubernetes.core` overrides can't import `_action_utils`, so each carries the same inline `AFLP_DISABLE` check at the top of its own `_is_local()` — keep those in sync with the shared one. Because the fast path never runs under the switch, results are unmarked, so the summary callback reports `fast=0 fallback=N` (a built-in confirmation the switch took effect).
 
+### Strict mode (`AFLP_STRICT`)
+
+`strict_guard(connection, play_context, task=None)` in `_action_utils.py` raises `AnsibleActionFail` (with a best-effort reason — non-local / become / check_mode / async / "unsupported arguments") when `AFLP_STRICT` is truthy, so an *unintended* fallback fails the task instead of silently running slow. It is **called at the top of every plugin's fallback branch**, right before the delegate (the `_execute_module(...)` or `_Standard = _load_builtin_action(...)` line) — all 14 standalone plugins import and call it. It is a no-op when `AFLP_STRICT` is unset (so it never affects normal runs or existing tests), and `_fast_disabled()` suppresses it (AFLP_DISABLE is an intentional fallback; the two are not meant to be combined). The three `kubernetes.core` overrides define a self-contained `_strict_guard()` (alongside their own `_is_local()`) and call it at their delegation points — keep these in sync with the shared one. When adding a new plugin, add a `strict_guard(conn, self._play_context, self._task)` call to each of its fallback branches.
+
 ### Atomic writes
 
 `atomic_write()` in `_action_utils.py` writes to a same-directory temp file then `shutil.move()`s it. Used by `copy.py`, `template.py`, `lineinfile.py`, and `get_url.py`. Mode handling matches stock ansible's `atomic_move`: an explicit `mode` is applied; otherwise an *existing* file keeps its perms and a *new* file gets the umask default (`0666 & ~umask`) — **not** mkstemp's restrictive `0600`. This umask default lives only here, so `copy`/`template`/`lineinfile`/`get_url` all inherit it (don't re-implement it per plugin).
@@ -91,7 +95,7 @@ make test-int   # or: make test  (unit + integration)
 Defined at the top of `Makefile`:
 
 ```makefile
-MATRIX := 3.12:2.19.3:5.4.0  3.14:2.20.5:5.6.0
+MATRIX := 3.14:2.20.5:5.6.0  3.12:2.19.3:5.4.0
 #          ^Python  ^ansible-core  ^ansible-modules-hashivault
 ```
 

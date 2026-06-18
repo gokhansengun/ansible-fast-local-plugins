@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 
-from ansible.module_utils._text import to_native
+from ansible.module_utils.common.text.converters import to_native
 from ansible.plugins.action import ActionBase
 from ansible.utils.display import Display
 
@@ -25,6 +25,25 @@ def _is_local(connection):
     if 'connection.local' in type(connection).__module__:
         return True
     return False
+
+
+def _strict_guard(connection, play_context):
+    # AFLP_STRICT: raise rather than fall back to the genuine collection, so an
+    # unintended k8s task in a local-only run is caught. AFLP_DISABLE (the global
+    # kill-switch) is an intentional fallback and suppresses this.
+    truthy = ('1', 'true', 'yes', 'on')
+    if (os.environ.get('AFLP_STRICT', '').strip().lower() in truthy
+            and os.environ.get('AFLP_DISABLE', '').strip().lower() not in truthy):
+        reasons = []
+        if not _is_local(connection):
+            reasons.append('non-local connection')
+        if getattr(play_context, 'become', False):
+            reasons.append('become')
+        reason = ', '.join(reasons) or 'an unsupported argument'
+        from ansible.errors import AnsibleActionFail
+        raise AnsibleActionFail(
+            'AFLP_STRICT: this kubernetes.core task would fall back to the genuine '
+            'collection (%s); refusing because AFLP_STRICT is set.' % reason)
 
 
 def _load_standard_action():
@@ -125,6 +144,7 @@ class ActionModule(ActionBase):
         )
 
         if not _is_local(conn) or self._play_context.become:
+            _strict_guard(conn, self._play_context)
             display.debug('fast_k8s_info: non-local or become, delegating to collection plugin')
             _Standard = _load_standard_action()
             if _Standard is not None:

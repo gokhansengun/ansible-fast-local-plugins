@@ -7,7 +7,7 @@ import stat as stat_module
 import sys
 import tempfile
 
-from ansible.module_utils._text import to_native
+from ansible.module_utils.common.text.converters import to_native
 
 # Result key stamped onto every successful fast (in-process) result so tests can
 # confirm the fast action plugin actually handled the task rather than the
@@ -75,6 +75,47 @@ def _is_local(connection):
     if 'connection.local' in type(connection).__module__:
         return True
     return False
+
+
+# Strict mode. When AFLP_STRICT is truthy, a fast plugin that would fall back to
+# stock ansible-core raises instead. On a local-only controller every task is
+# expected to hit the fast path, so an unexpected fallback (a stray become, a
+# non-local connection, an unsupported argument) signals an unintended task —
+# strict mode surfaces it loudly rather than silently running the slow path.
+_STRICT_ENV = 'AFLP_STRICT'
+
+
+def _strict_enabled():
+    """True when AFLP_STRICT requests that fallbacks raise instead of delegating."""
+    return os.environ.get(_STRICT_ENV, '').strip().lower() in _TRUTHY
+
+
+def strict_guard(connection, play_context, task=None):
+    """Raise instead of falling back to stock, when AFLP_STRICT is set.
+
+    Call this at the top of a fast plugin's fallback branch, just before it
+    delegates. No-op unless AFLP_STRICT is truthy. The AFLP_DISABLE kill-switch
+    is an *intentional* global fallback, so it suppresses the guard (the two are
+    not meant to be combined). The raised error reports a best-effort reason so
+    the offending task is easy to diagnose.
+    """
+    if not _strict_enabled() or _fast_disabled():
+        return
+    reasons = []
+    if not _is_local(connection):
+        reasons.append('non-local connection')
+    if getattr(play_context, 'become', False):
+        reasons.append('become')
+    if getattr(play_context, 'check_mode', False):
+        reasons.append('check_mode')
+    if task is not None and getattr(task, 'async_val', 0):
+        reasons.append('async')
+    reason = ', '.join(reasons) or 'unsupported arguments'
+    from ansible.errors import AnsibleActionFail
+    raise AnsibleActionFail(
+        'AFLP_STRICT: this task would fall back from a fast local plugin to '
+        'stock ansible-core (%s); refusing because AFLP_STRICT is set, so '
+        'unintended fallbacks are caught rather than silently run slow.' % reason)
 
 
 def _parse_mode(mode):

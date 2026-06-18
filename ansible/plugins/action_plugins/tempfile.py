@@ -4,7 +4,7 @@ import os
 import sys
 import tempfile as _tempfile
 
-from ansible.module_utils._text import to_native
+from ansible.module_utils.common.text.converters import to_native
 from ansible.plugins.action import ActionBase
 from ansible.utils.display import Display
 
@@ -12,7 +12,7 @@ from ansible.utils.display import Display
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
-from _action_utils import _is_local, mark_fast_result  # noqa: E402
+from _action_utils import _is_local, mark_fast_result, strict_guard  # noqa: E402
 
 display = Display()
 
@@ -44,6 +44,7 @@ class ActionModule(ActionBase):
 
         if not _is_local(conn) or self._play_context.become or self._play_context.check_mode:
             display.debug('fast_tempfile: non-local connection, delegating to module')
+            strict_guard(conn, self._play_context, self._task)
             return self._execute_module(task_vars=task_vars, wrap_async=self._task.async_val)
 
         return mark_fast_result(self._run_local(args, result))

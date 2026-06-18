@@ -1,0 +1,57 @@
+---
+# A small illustrative play used by `make demo`. It exercises several fast
+# plugins plus one task deliberately forced down the fallback (lineinfile with a
+# file-attr arg), so the aflp_fast_path_summary callback prints a mixed table.
+# Run again with AFLP_DISABLE=1 and every row becomes fast=0 fallback=N.
+- name: AFLP demo — a mix of fast tasks and one forced fallback
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_demo
+
+  tasks:
+    - name: "Create a directory (fast file)"
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    - name: "Write a file (fast copy)"
+      copy:
+        content: "hello\nfrom aflp\n"
+        dest: "{{ work_dir }}/greeting.txt"
+
+    - name: "Render a template (fast template)"
+      template:
+        src: "{{ playbook_dir }}/../templates/bench.j2"
+        dest: "{{ work_dir }}/rendered.txt"
+      vars:
+        recipient: demo
+        item: 1
+
+    - name: "Stat the file (fast stat)"
+      stat:
+        path: "{{ work_dir }}/greeting.txt"
+
+    - name: "Read the file (fast slurp)"
+      slurp:
+        src: "{{ work_dir }}/greeting.txt"
+
+    - name: "Append a line (fast lineinfile)"
+      lineinfile:
+        path: "{{ work_dir }}/greeting.txt"
+        line: "appended"
+
+    - name: "Run a command (fast command)"
+      command: "true"
+      changed_when: false
+
+    - name: "Append with a mode — forces a FALLBACK to stock lineinfile"
+      lineinfile:
+        path: "{{ work_dir }}/greeting.txt"
+        line: "with-mode"
+        mode: "0644"
+
+    - name: "Clean up (fast file)"
+      file:
+        path: "{{ work_dir }}"
+        state: absent

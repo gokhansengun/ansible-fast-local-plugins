@@ -4,7 +4,7 @@ import hashlib
 import os
 import sys
 
-from ansible.module_utils._text import to_bytes, to_text
+from ansible.module_utils.common.text.converters import to_bytes, to_text
 from ansible.module_utils.parsing.convert_bool import boolean
 from ansible.plugins.action import ActionBase
 from ansible.utils.display import Display
@@ -13,7 +13,7 @@ from ansible.utils.display import Display
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
-from _action_utils import _is_local, atomic_write, _load_builtin_action, mark_fast_result  # noqa: E402
+from _action_utils import _is_local, atomic_write, _load_builtin_action, mark_fast_result, strict_guard  # noqa: E402
 
 display = Display()
 
@@ -60,6 +60,7 @@ class ActionModule(ActionBase):
 
         if not _is_local(conn) or not has_content or has_src or requires_standard_plugin:
             display.debug('fast_copy: delegating to standard copy plugin')
+            strict_guard(conn, self._play_context, self._task)
             _Standard = _load_builtin_action('copy').ActionModule
             std = _Standard(
                 self._task, conn, self._play_context,
@@ -79,9 +80,11 @@ class ActionModule(ActionBase):
         force = boolean(args.get('force', True), strict=False)
         mode = args.get('mode')
 
-        # Resolve dest
+        # Resolve dest. ansible has already templated task args, so any '{{ }}'
+        # in dest is resolved; template() here only re-resolves residual markers.
+        # (convert_bare is deprecated in 2.20 and dest is never a bare variable.)
         dest = os.path.expanduser(os.path.expandvars(
-            self._templar.template(dest, convert_bare=True)
+            self._templar.template(dest)
         ))
 
         # Render content (may contain Jinja2 from task args templating)

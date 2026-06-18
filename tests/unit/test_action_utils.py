@@ -88,6 +88,58 @@ class TestFastDisabled:
 
 
 # ---------------------------------------------------------------------------
+# strict_guard (AFLP_STRICT)
+# ---------------------------------------------------------------------------
+
+class TestStrictGuard:
+    def _conn(self, transport='local'):
+        c = MagicMock()
+        c.transport = transport
+        c._load_name = transport
+        return c
+
+    def _pc(self, become=False, check_mode=False):
+        pc = MagicMock()
+        pc.become = become
+        pc.check_mode = check_mode
+        return pc
+
+    def test_noop_when_unset(self, monkeypatch):
+        monkeypatch.delenv('AFLP_STRICT', raising=False)
+        utils.strict_guard(self._conn('ssh'), self._pc(become=True))  # must not raise
+
+    def test_raises_for_non_local(self, monkeypatch):
+        from ansible.errors import AnsibleActionFail
+        monkeypatch.setenv('AFLP_STRICT', '1')
+        with pytest.raises(AnsibleActionFail, match='non-local connection'):
+            utils.strict_guard(self._conn('ssh'), self._pc())
+
+    def test_raises_for_become_with_reason(self, monkeypatch):
+        from ansible.errors import AnsibleActionFail
+        monkeypatch.setenv('AFLP_STRICT', '1')
+        with pytest.raises(AnsibleActionFail, match='become'):
+            utils.strict_guard(self._conn('local'), self._pc(become=True))
+
+    def test_reason_defaults_to_unsupported_arguments(self, monkeypatch):
+        from ansible.errors import AnsibleActionFail
+        monkeypatch.setenv('AFLP_STRICT', '1')
+        with pytest.raises(AnsibleActionFail, match='unsupported arguments'):
+            utils.strict_guard(self._conn('local'), self._pc())
+
+    def test_suppressed_by_disable(self, monkeypatch):
+        # AFLP_DISABLE is an intentional fallback; strict must not fire.
+        monkeypatch.setenv('AFLP_STRICT', '1')
+        monkeypatch.setenv('AFLP_DISABLE', '1')
+        utils.strict_guard(self._conn('ssh'), self._pc(become=True))  # must not raise
+
+    def test_strict_enabled_parsing(self, monkeypatch):
+        monkeypatch.setenv('AFLP_STRICT', 'YES')
+        assert utils._strict_enabled() is True
+        monkeypatch.setenv('AFLP_STRICT', 'off')
+        assert utils._strict_enabled() is False
+
+
+# ---------------------------------------------------------------------------
 # _parse_mode
 # ---------------------------------------------------------------------------
 

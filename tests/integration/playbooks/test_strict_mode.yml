@@ -1,0 +1,43 @@
+---
+# Run with AFLP_STRICT=1. Every task here is handled by a fast local plugin, so
+# strict mode must NOT fire — the play should complete successfully. (The
+# negative case — a task that falls back failing under strict — is covered by
+# running test_fast_path_summary.yml with AFLP_STRICT=1.)
+- name: All-fast playbook that must pass under AFLP_STRICT
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_test_strict
+
+  tasks:
+    - name: Create work directory
+      file:
+        path: "{{ work_dir }}"
+        state: directory
+
+    - name: Write a file
+      copy:
+        content: "strict\n"
+        dest: "{{ work_dir }}/f"
+
+    - name: Stat it
+      stat:
+        path: "{{ work_dir }}/f"
+
+    - name: Edit it
+      lineinfile:
+        path: "{{ work_dir }}/f"
+        line: "added"
+
+    - name: Read it
+      slurp:
+        src: "{{ work_dir }}/f"
+
+    - name: Run a command
+      command: "true"
+      changed_when: false
+
+    - name: Cleanup
+      file:
+        path: "{{ work_dir }}"
+        state: absent

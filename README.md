@@ -77,6 +77,11 @@ Only actions that have a local override are listed (unrelated tasks like `debug`
 or `set_fact` are ignored), looped tasks are counted per item, and it is fail-open
 and read-only — it never alters a result or breaks a run.
 
+Run `make demo` for a guided tour: it runs a small play normally (a mixed
+`fast`/`fallback` table), again with `AFLP_DISABLE=1` (every row `fast=0`), and
+again with `AFLP_STRICT=1` (the run fails loudly at the one fallback task), then
+finishes with a mini fast-vs-stock benchmark for `copy`/`stat`.
+
 ### Disabling the fast path (kill-switch)
 
 Set `AFLP_DISABLE` to a truthy value (`1`, `true`, `yes`, `on`) to force **every**
@@ -92,6 +97,29 @@ This is the quickest way to answer "is a fast plugin causing this?" — flip it 
 re-run; if the symptom disappears, a fast plugin is implicated. It also pairs with
 the summary callback above (everything shows up as `fallback`) and is handy for
 A/B correctness checks. The variable is read per task, so it can vary between runs.
+
+### Strict mode (fail on fallback)
+
+Set `AFLP_STRICT` to a truthy value to make any task that would fall back to stock
+ansible-core **fail loudly** instead of silently running the slow path. On a
+local-only controller every task is expected to hit the fast path, so an
+unexpected fallback (a stray `become`, a non-local connection, an unsupported
+argument) signals an unintended task — strict mode surfaces it.
+
+```bash
+AFLP_STRICT=1 ansible-playbook site.yml
+```
+
+The failing task reports why it would have fallen back, e.g.:
+
+```
+fatal: [localhost]: FAILED! => {"msg": "AFLP_STRICT: this task would fall back
+from a fast local plugin to stock ansible-core (become); refusing because
+AFLP_STRICT is set, so unintended fallbacks are caught rather than silently run slow."}
+```
+
+`AFLP_DISABLE` takes precedence — it is an *intentional* global fallback, so it
+suppresses strict mode rather than making every task fail.
 
 ## Plugins
 
@@ -186,7 +214,7 @@ get_url      19.729s    2.265s       8.7x
 TOTAL       183.987s   15.762s      11.7x
 ```
 
-> Each pair uses its own controller image — select it with `PAIR`, e.g. `make bench PAIR=3.14:2.20.5:5.6.0`. Because the controller image builds to a single shared tag, switch pairs with `make build MATRIX='<pair>'` first (otherwise `docker compose run` reuses the cached image regardless of the build args).
+> Each pair uses its own controller image — the default is the first `MATRIX` entry (`3.14:2.20.5:5.6.0`); select another with `PAIR`, e.g. `make bench PAIR=3.12:2.19.3:5.4.0`. Because the controller image builds to a single shared tag, switch pairs with `make build MATRIX='<pair>'` first (otherwise `docker compose run` reuses the cached image regardless of the build args).
 
 The reported time subtracts a zero-iteration overhead run (ansible startup + per-run setup) from the measured run, so it isolates the plugin's own per-invocation cost; the timed run is repeated and the median is reported. Each run also asserts the fast-path marker (`__produced_by_fast_plugin`) is present in fast mode and absent in stock mode, so the harness fails loudly rather than silently comparing the wrong code paths. Run `python bench/benchmark.py -h` for all flags (`-n/--iterations`, `-r/--repeat`, `-w/--warmup`, `-p/--plugins`).
 
@@ -195,7 +223,7 @@ The reported time subtracts a zero-iteration overhead run (ansible startup + per
 Tests run against multiple Python × ansible-core pairs. The matrix is defined at the top of `Makefile`:
 
 ```makefile
-MATRIX := 3.12:2.19.3:5.4.0  3.14:2.20.5:5.6.0
+MATRIX := 3.14:2.20.5:5.6.0  3.12:2.19.3:5.4.0
 #          ^Python  ^ansible-core  ^ansible-modules-hashivault
 ```
 
@@ -207,10 +235,11 @@ Run a single pair:
 make test MATRIX='3.12:2.19.3:5.4.0'
 ```
 
-Drop into a shell inside a specific controller image:
+Drop into a shell inside a specific controller image (the default pair is the
+first `MATRIX` entry; pass `PAIR` to pick another):
 
 ```bash
-make shell PAIR=3.14:2.20.5:5.6.0
+make shell PAIR=3.12:2.19.3:5.4.0
 ```
 
 ## Project structure

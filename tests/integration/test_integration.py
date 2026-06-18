@@ -116,6 +116,28 @@ def test_kill_switch():
 
 
 @pytest.mark.integration
+def test_strict_mode_passes_all_fast():
+    """AFLP_STRICT=1 must not interfere with a play whose tasks all run fast."""
+    result = _run(os.path.join(PLAYBOOK_DIR, 'test_strict_mode.yml'),
+                  env={'AFLP_STRICT': '1'})
+    _assert_playbook(result)
+
+
+@pytest.mark.integration
+def test_strict_mode_fails_on_fallback():
+    """AFLP_STRICT=1 must fail the play when a task falls back to stock.
+
+    test_fast_path_summary.yml contains a lineinfile task with a file-attr arg
+    that the fast plugin delegates; under strict mode that must raise.
+    """
+    result = _run(os.path.join(PLAYBOOK_DIR, 'test_fast_path_summary.yml'),
+                  env={'AFLP_STRICT': '1'})
+    assert result.returncode != 0, (
+        f'strict mode should have failed on the fallback task\n{result.stdout}')
+    assert 'AFLP_STRICT' in (result.stdout + result.stderr), result.stdout
+
+
+@pytest.mark.integration
 def test_fast_path_summary():
     """The aflp_fast_path_summary callback must print a per-action tally.
 

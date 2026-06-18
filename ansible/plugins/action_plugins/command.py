@@ -6,7 +6,7 @@ import shlex
 import subprocess
 import sys
 
-from ansible.module_utils._text import to_bytes, to_native, to_text
+from ansible.module_utils.common.text.converters import to_bytes, to_native, to_text
 from ansible.plugins.action import ActionBase
 from ansible.utils.display import Display
 
@@ -14,7 +14,7 @@ from ansible.utils.display import Display
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
-from _action_utils import _is_local, _load_builtin_action, mark_fast_result  # noqa: E402
+from _action_utils import _is_local, _load_builtin_action, mark_fast_result, strict_guard  # noqa: E402
 
 display = Display()
 
@@ -54,6 +54,7 @@ class ActionModule(ActionBase):
                 or self._task.async_val or self._play_context.check_mode
                 or real_env):
             display.debug('fast_command: delegating to standard command plugin')
+            strict_guard(conn, self._play_context, self._task)
             _Standard = _load_builtin_action('command').ActionModule
             std = _Standard(
                 self._task, conn, self._play_context,
