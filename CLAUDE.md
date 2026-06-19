@@ -47,7 +47,7 @@ Local action plugins live in the *legacy* namespace, so bare `template:` and `an
 
 `ansible/plugins/callback_plugins/aflp_builtin_redirect.py` wraps `ansible.plugins.loader.action_loader.get` so that `ansible.builtin.<name>` becomes `ansible.legacy.<name>` whenever a `<name>.py` exists in the `action_plugins` path. It is enabled via `callback_plugins` in `ansible.cfg` and auto-loads (`CALLBACK_NEEDS_ENABLED = False`); `load_callbacks()` runs before the worker fork, so the patch is inherited by every task worker. Overrides are auto-discovered — adding a new action plugin needs no change here. The patch is **fail-open**: any error installing it or rewriting a name falls back to stock behaviour.
 
-> Why a callback and not a strategy plugin: custom strategy plugins (the other interception point) are deprecated in ansible-core 2.19 and slated for removal (~2.21) — see ansible/ansible#84725. The patched symbol (`action_loader.get`) is verified against the 2.19 / 2.20 matrix; re-check on a matrix bump.
+> Why a callback and not a strategy plugin: custom strategy plugins (the other interception point) are deprecated in ansible-core 2.19 and slated for removal (~2.21) — see ansible/ansible#84725. The patched symbol (`action_loader.get`) is verified against the 2.19 / 2.20 / 2.21 matrix; re-check on a matrix bump.
 
 ### Fast-path summary callback (`aflp_fast_path_summary`)
 

@@ -1,5 +1,5 @@
 # Format: PYTHON_VERSION:ANSIBLE_CORE_VERSION:HASHIVAULT_MODULE_VERSION
-MATRIX := 3.14:2.20.5:5.6.0 3.12:2.19.3:5.4.0
+MATRIX := 3.14:2.21.1:5.6.0 3.14:2.20.5:5.6.0 3.12:2.19.3:5.4.0
 
 COMPOSE := docker compose -f docker/docker-compose.yml
 
