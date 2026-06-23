@@ -138,7 +138,7 @@ suppresses strict mode rather than making every task fail.
 | `stat` | `os.stat()` in-process | non-local, `become` |
 | `file` | `os`/`shutil` filesystem ops in-process | non-local, `become`, check-mode, `access_time`/`modification_time` |
 | `tempfile` | `tempfile.mkstemp/mkdtemp` in-process | non-local, `become`, check-mode |
-| `copy` | atomic write via `shutil.move` (inline `content` or a local-file `src`) | non-local, `remote_src`, directory `src`, `become`, `mode: preserve`, unsupported args |
+| `copy` | atomic write via `shutil.move` (inline `content`, a local-file `src`, or a recursive local-directory `src`) | non-local, `remote_src`, symlink in source tree, `become`, `mode: preserve`, `directory_mode: preserve`, unsupported args |
 | `template` | Jinja2 rendering via `ansible.template.Templar` | non-local, `become`, unsupported args |
 | `lineinfile` | in-process regexp/line edit + atomic write | non-local, `become`, check-mode, file-attr args (`mode`/`owner`/…), `validate` |
 | `uri` | HTTP request via `ansible.module_utils.urls.open_url` | non-local, `become`, async, check-mode, `dest`/`src`, `form-multipart`, unsupported args |

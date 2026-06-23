@@ -150,4 +150,7 @@ class ActionModule(ActionBase):
             msg='' if not failed else 'non-zero return code',
             failed=failed,
         ))
-        return result
+        # The command actually ran in-process: mark it even when rc != 0 (the
+        # non-zero exit is the command's, not a fallback), so a `failed_when:`-
+        # rescued failure isn't misreported as a fallback.
+        return mark_fast_result(result, force=True)

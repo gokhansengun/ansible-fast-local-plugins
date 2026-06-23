@@ -14,11 +14,11 @@ from ansible.utils.display import Display
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
-from _action_utils import _is_local, atomic_write, _load_builtin_action, mark_fast_result, strict_guard  # noqa: E402
+from _action_utils import _is_local, _parse_mode, atomic_write, _load_builtin_action, mark_fast_result, strict_guard  # noqa: E402
 
 display = Display()
 
-FAST_COPY_VERSION = '1.1'
+FAST_COPY_VERSION = '1.2'
 
 # Args whose presence forces the standard plugin (features the fast path doesn't
 # reimplement: ownership, SELinux, backups, validation, remote-side source, ...).
@@ -26,6 +26,23 @@ _UNSUPPORTED_ARGS = (
     'attributes', 'backup', 'group', 'owner', 'remote_src',
     'selevel', 'serole', 'setype', 'seuser', 'unsafe_writes', 'validate',
 )
+
+
+def _tree_has_symlink(root):
+    """True if `root`, or anything under it, is a symlink.
+
+    os.walk (followlinks=False) lists a symlinked dir as a name but does not
+    descend into it, so each entry is checked individually. The fast path can't
+    faithfully reproduce stock's local_follow handling of symlink trees, so any
+    symlink forces a fallback.
+    """
+    if os.path.islink(root):
+        return True
+    for base, dirs, files in os.walk(root):
+        for name in dirs + files:
+            if os.path.islink(os.path.join(base, name)):
+                return True
+    return False
 
 
 class ActionModule(ActionBase):
@@ -87,7 +104,8 @@ class ActionModule(ActionBase):
             extra_reasons.append('local_follow=false')
 
         # Resolve a `src` on the controller (== target for a local connection).
-        # A directory source means a recursive copy the fast path doesn't do.
+        # A directory source is recursively copied in-process for the common case;
+        # the trickier shapes (symlinks, mode/directory_mode=preserve) fall back.
         resolved_src = None
         if has_src and not has_content and not fallback:
             try:
@@ -97,9 +115,11 @@ class ActionModule(ActionBase):
                 extra_reasons.append('source not found (%s)' % to_text(e))
             else:
                 if os.path.isdir(resolved_src):
-                    fallback = True
-                    extra_reasons.append('directory source')
-                    resolved_src = None
+                    reason = self._dir_unsupported(args, resolved_src)
+                    if reason:
+                        fallback = True
+                        extra_reasons.append(reason)
+                        resolved_src = None
 
         if fallback:
             display.debug('fast_copy: delegating to standard copy plugin')
@@ -127,6 +147,9 @@ class ActionModule(ActionBase):
         dest = os.path.expanduser(os.path.expandvars(
             self._templar.template(dest)
         ))
+
+        if resolved_src is not None and os.path.isdir(resolved_src):
+            return self._copy_dir(args, resolved_src, dest, mode, force)
 
         if resolved_src is not None:
             display.debug('fast_copy: local + src path, using in-process copy')
@@ -176,3 +199,89 @@ class ActionModule(ActionBase):
         if resolved_src is not None:
             result['src'] = resolved_src
         return result
+
+    @staticmethod
+    def _dir_unsupported(args, src_dir):
+        """Return a fallback reason if a directory `src` can't be fast-pathed,
+        else None. The fast path handles regular-file trees; symlinks and
+        preserve/unsupported directory_mode delegate to stock."""
+        dm = args.get('directory_mode')
+        if dm == 'preserve':
+            return 'directory_mode=preserve'
+        if dm is not None:
+            try:
+                _parse_mode(dm)
+            except ValueError:
+                return 'unsupported directory_mode %r' % (dm,)
+        if _tree_has_symlink(src_dir):
+            return 'symlink in source tree'
+        return None
+
+    def _ensure_dir(self, path, mode_int):
+        """Create `path` (and parents) if missing and apply `mode_int` when set.
+        Returns True if the directory was created or its mode changed."""
+        existed = os.path.isdir(path)
+        if not existed:
+            os.makedirs(path, exist_ok=True)
+        changed = not existed
+        if mode_int is not None:
+            if (os.stat(path).st_mode & 0o7777) != mode_int:
+                os.chmod(path, mode_int)
+                changed = True
+        return changed
+
+    def _copy_one_file(self, src_file, dest_file, mode, force):
+        """Copy a single file with checksum idempotency. Returns (changed, err)."""
+        try:
+            with open(src_file, 'rb') as f:
+                b = f.read()
+        except OSError as e:
+            return False, 'could not read source %s: %s' % (src_file, to_text(e))
+        new_checksum = hashlib.sha1(b, usedforsecurity=False).hexdigest()
+        if os.path.exists(dest_file):
+            if not force:
+                return False, None
+            try:
+                with open(dest_file, 'rb') as f:
+                    if hashlib.sha1(f.read(), usedforsecurity=False).hexdigest() == new_checksum:
+                        return False, None
+            except OSError:
+                pass
+        err = atomic_write(dest_file, b, mode)
+        return (False, err) if err else (True, None)
+
+    def _copy_dir(self, args, src_dir, dest, mode, force):
+        """Recursively copy a local directory tree in-process.
+
+        Honors stock's trailing-slash semantics: `src: dir/` copies the *contents*
+        into dest, `src: dir` copies the directory *itself* (nested by basename).
+        Files get `mode` (or umask default); directories get `directory_mode` (or
+        umask default), including the dest root; empty directories are created.
+        """
+        display.debug('fast_copy: local + directory src, recursive in-process copy')
+        src_dir = src_dir.rstrip(os.sep) or os.sep
+        contents = to_text(args.get('src') or '').endswith('/')
+        dir_mode = args.get('directory_mode')
+        dir_mode_int = _parse_mode(dir_mode) if dir_mode is not None else None
+
+        changed = self._ensure_dir(dest, dir_mode_int)
+        root_target = dest if contents else os.path.join(dest, os.path.basename(src_dir))
+        if root_target != dest and self._ensure_dir(root_target, dir_mode_int):
+            changed = True
+
+        for base, dirs, files in os.walk(src_dir):
+            rel = os.path.relpath(base, src_dir)
+            for d in sorted(dirs):
+                rel_d = d if rel == '.' else os.path.join(rel, d)
+                if self._ensure_dir(os.path.join(root_target, rel_d), dir_mode_int):
+                    changed = True
+            for f in sorted(files):
+                rel_f = f if rel == '.' else os.path.join(rel, f)
+                ch, err = self._copy_one_file(
+                    os.path.join(base, f), os.path.join(root_target, rel_f), mode, force)
+                if err:
+                    return dict(failed=True, msg=err)
+                if ch:
+                    changed = True
+
+        return dict(changed=changed, dest=dest.rstrip(os.sep) + os.sep, src=src_dir)

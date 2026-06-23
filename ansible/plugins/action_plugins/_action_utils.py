@@ -16,14 +16,24 @@ from ansible.module_utils.common.text.converters import to_native, to_text
 FAST_PLUGIN_MARKER = '__produced_by_fast_plugin'
 
 
-def mark_fast_result(result):
-    """Stamp a successful fast-path result dict with FAST_PLUGIN_MARKER.
+def mark_fast_result(result, force=False):
+    """Stamp a fast-path result dict with FAST_PLUGIN_MARKER.
 
-    Only non-failed dicts are marked: presence of the key means "the fast
-    in-process plugin produced this result". Failed results and non-dict values
-    pass through untouched, and setdefault avoids clobbering an explicit value.
+    Presence of the key means "the fast in-process plugin produced this result".
+    By default only non-failed dicts are marked, so a *plugin* failure (it could
+    not do its job) or a delegated/fallback result stays unmarked.
+
+    `force=True` marks even a `failed` result. command/shell use this for a result
+    that came from actually running the command: a non-zero `rc` is the command's
+    outcome, not a fallback, so the plugin DID run in-process and the result must
+    carry the marker (otherwise a `failed_when:`-rescued non-zero command looks
+    like a fallback to the summary callback). Pre-execution bails (no command,
+    missing chdir) are returned without force and stay unmarked.
+
+    Non-dict values pass through untouched; setdefault avoids clobbering an
+    explicit value.
     """
-    if isinstance(result, dict) and not result.get('failed'):
+    if isinstance(result, dict) and (force or not result.get('failed')):
         result.setdefault(FAST_PLUGIN_MARKER, True)
     return result
 

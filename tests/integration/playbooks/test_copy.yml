@@ -136,6 +136,50 @@
           - r_srcdir.dest == work_dir ~ '/destdir/source.crt'
           - r_srcdir['__produced_by_fast_plugin'] | default(false)
 
+    # --- recursive directory copy (fast path) ---
+    - name: Build a source tree
+      block:
+        - file: { path: "{{ work_dir }}/srctree/sub", state: directory }
+        - file: { path: "{{ work_dir }}/srctree/emptydir", state: directory }
+        - copy: { content: "root file\n", dest: "{{ work_dir }}/srctree/root.txt" }
+        - copy: { content: "nested file\n", dest: "{{ work_dir }}/srctree/sub/nested.txt" }
+
+    - name: Copy the directory contents (trailing slash) on the fast path
+      copy:
+        src: "{{ work_dir }}/srctree/"
+        dest: "{{ work_dir }}/treedst"
+      register: r_dir
+
+    - name: Stat copied files and the empty dir
+      stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ work_dir }}/treedst/root.txt"
+        - "{{ work_dir }}/treedst/sub/nested.txt"
+        - "{{ work_dir }}/treedst/emptydir"
+      register: tree_stats
+
+    - name: Assert the tree was copied in-process (contents, incl. empty dir)
+      assert:
+        that:
+          - r_dir.changed
+          - r_dir['__produced_by_fast_plugin'] | default(false)
+          - tree_stats.results[0].stat.exists
+          - tree_stats.results[1].stat.exists
+          - tree_stats.results[2].stat.isdir
+
+    - name: Copy the same tree again (idempotent, still fast)
+      copy:
+        src: "{{ work_dir }}/srctree/"
+        dest: "{{ work_dir }}/treedst"
+      register: r_dir2
+
+    - name: Assert directory copy is idempotent
+      assert:
+        that:
+          - not r_dir2.changed
+          - r_dir2['__produced_by_fast_plugin'] | default(false)
+
     - name: Cleanup
       file:
         path: "{{ work_dir }}"

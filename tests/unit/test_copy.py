@@ -118,9 +118,13 @@ class TestCopyFallback:
             action.run(task_vars={})
         mock.assert_called_once()
 
-    def test_delegates_for_directory_src(self, tmp_path):
+    def test_delegates_for_symlinked_directory_src(self, tmp_path):
+        # A regular-file directory is fast-pathed; a tree with a symlink falls back
+        # (the fast path can't reproduce stock's local_follow handling).
         src_dir = tmp_path / 'srcdir'
         src_dir.mkdir()
+        (src_dir / 'f.txt').write_text('x')
+        (src_dir / 'link').symlink_to(src_dir / 'f.txt')
         dest = str(tmp_path / 'dstdir')
         action = _src_action({'src': str(src_dir), 'dest': dest}, str(src_dir))
         with mock_builtin_run('copy', {'changed': True}) as mock:
@@ -221,13 +225,15 @@ class TestCopyStrictReason:
         with pytest.raises(AnsibleActionFail, match='remote_src'):
             action.run(task_vars={})
 
-    def test_strict_reports_directory_source(self, tmp_path, monkeypatch):
+    def test_strict_reports_symlink_in_tree(self, tmp_path, monkeypatch):
         monkeypatch.setenv('AFLP_STRICT', '1')
         src_dir = tmp_path / 'srcdir'
         src_dir.mkdir()
+        (src_dir / 'f.txt').write_text('x')
+        (src_dir / 'link').symlink_to(src_dir / 'f.txt')
         dest = str(tmp_path / 'dstdir')
         action = _src_action({'src': str(src_dir), 'dest': dest}, str(src_dir))
-        with pytest.raises(AnsibleActionFail, match='directory source'):
+        with pytest.raises(AnsibleActionFail, match='symlink in source tree'):
             action.run(task_vars={})
 
     def test_strict_reports_backup_arg(self, tmp_path, monkeypatch):
@@ -236,3 +242,75 @@ class TestCopyStrictReason:
         action = make_action('copy', {'dest': dest, 'content': 'x', 'backup': True})
         with pytest.raises(AnsibleActionFail, match='backup'):
             action.run(task_vars={})
+
+
+class TestCopyDirFastPath:
+    """A regular-file directory tree is copied recursively in-process."""
+
+    def _tree(self, tmp_path):
+        src = tmp_path / 'tree'
+        (src / 'sub').mkdir(parents=True)
+        (src / 'empty').mkdir()
+        (src / 'a.txt').write_text('A\n')
+        (src / 'sub' / 'b.txt').write_text('B\n')
+        return src
+
+    def test_trailing_slash_copies_contents(self, tmp_path):
+        src = self._tree(tmp_path)
+        dest = tmp_path / 'dst'
+        action = _src_action({'src': str(src) + '/', 'dest': str(dest)}, str(src))
+        result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is True
+        assert result[FAST_PLUGIN_MARKER] is True
+        assert result['dest'].endswith('/')
+        # contents land directly in dest (no 'tree/' level)
+        assert (dest / 'a.txt').read_text() == 'A\n'
+        assert (dest / 'sub' / 'b.txt').read_text() == 'B\n'
+        assert (dest / 'empty').is_dir()
+        assert not (dest / 'tree').exists()
+
+    def test_no_slash_nests_dir_by_basename(self, tmp_path):
+        src = self._tree(tmp_path)
+        dest = tmp_path / 'dst'
+        action = _src_action({'src': str(src), 'dest': str(dest)}, str(src))
+        result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert (dest / 'tree' / 'a.txt').read_text() == 'A\n'
+        assert (dest / 'tree' / 'sub' / 'b.txt').read_text() == 'B\n'
+        assert (dest / 'tree' / 'empty').is_dir()
+
+    def test_dir_copy_is_idempotent(self, tmp_path):
+        src = self._tree(tmp_path)
+        dest = tmp_path / 'dst'
+
+        def _act():
+            return _src_action({'src': str(src) + '/', 'dest': str(dest)}, str(src))
+        assert _act().run(task_vars={})['changed'] is True
+        assert _act().run(task_vars={})['changed'] is False
+
+    def test_file_mode_applies_to_files(self, tmp_path):
+        src = self._tree(tmp_path)
+        dest = tmp_path / 'dst'
+        action = _src_action({'src': str(src) + '/', 'dest': str(dest), 'mode': '0640'}, str(src))
+        action.run(task_vars={})
+        assert stat.S_IMODE(os.stat(dest / 'a.txt').st_mode) == 0o640
+        assert stat.S_IMODE(os.stat(dest / 'sub' / 'b.txt').st_mode) == 0o640
+
+    def test_directory_mode_applies_to_dirs(self, tmp_path):
+        src = self._tree(tmp_path)
+        dest = tmp_path / 'dst'
+        action = _src_action(
+            {'src': str(src) + '/', 'dest': str(dest), 'directory_mode': '0750'}, str(src))
+        action.run(task_vars={})
+        assert stat.S_IMODE(os.stat(dest).st_mode) == 0o750
+        assert stat.S_IMODE(os.stat(dest / 'sub').st_mode) == 0o750
+
+    def test_directory_mode_preserve_falls_back(self, tmp_path):
+        src = self._tree(tmp_path)
+        dest = str(tmp_path / 'dst')
+        action = _src_action(
+            {'src': str(src), 'dest': dest, 'directory_mode': 'preserve'}, str(src))
+        with mock_builtin_run('copy', {'changed': True}) as mock:
+            action.run(task_vars={})
+        mock.assert_called_once()

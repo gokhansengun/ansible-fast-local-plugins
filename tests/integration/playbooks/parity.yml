@@ -62,6 +62,29 @@
             content: "{{ {'result': r, 'sidecar': {'checksum': sc.stat.checksum, 'mode': sc.stat.mode}} | to_nice_json }}"
             dest: "{{ result_out }}"
 
+    # ------------------------------------------------ copy_dir / copy_dir_slash
+    # Recursive directory copy, both trailing-slash forms. The sidecar captures
+    # the whole produced tree (type+mode+relpath) and per-file checksums, so the
+    # runner verifies the fast tree is byte-for-byte identical to stock's.
+    - name: copy_dir
+      when: parity_plugin in ['copy_dir', 'copy_dir_slash']
+      block:
+        - file: { path: "{{ work_dir }}/src/sub", state: directory }
+        - file: { path: "{{ work_dir }}/src/empty", state: directory }
+        - copy: { content: "alpha\nfile a\n", dest: "{{ work_dir }}/src/a.txt" }
+        - copy: { content: "beta\n", dest: "{{ work_dir }}/src/sub/b.txt" }
+        - copy:
+            src: "{{ work_dir }}/src{{ '/' if parity_plugin == 'copy_dir_slash' else '' }}"
+            dest: "{{ work_dir }}/out"
+          register: r
+        - command: "find {{ work_dir }}/out -printf '%y %m %P\n'"
+          register: tree_manifest
+        - shell: "cd {{ work_dir }}/out && find . -type f | sort | xargs -r sha256sum"
+          register: tree_sums
+        - copy:
+            content: "{{ {'result': r, 'sidecar': {'tree': tree_manifest.stdout_lines | sort, 'sums': tree_sums.stdout_lines | sort}} | to_nice_json }}"
+            dest: "{{ result_out }}"
+
     # ------------------------------------------------------------ template ---
     - name: template
       when: parity_plugin == 'template'

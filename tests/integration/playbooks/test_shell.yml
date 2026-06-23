@@ -131,6 +131,24 @@
         that:
           - "'from stdin' in r_stdin.stdout"
 
+    # --- a non-zero command rescued by failed_when is still a fast result ---
+    # Mirrors a common probe: `kubectl get ...` that exits non-zero when absent,
+    # with failed_when: false. It ran in-process, so it must carry the marker and
+    # NOT be misreported as a fallback.
+    - name: Probe-style command that exits non-zero, rescued by failed_when
+      shell:
+        cmd: "exit 3"
+      register: r_probe
+      failed_when: false
+      changed_when: false
+
+    - name: Assert the rescued non-zero command is marked as a fast result
+      assert:
+        that:
+          - r_probe.rc == 3
+          - not r_probe.failed
+          - r_probe['__produced_by_fast_plugin'] | default(false)
+
     # --- environment is applied in-process, including templated values ---
     - name: Shell honoring a templated environment var on the fast path
       shell:

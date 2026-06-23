@@ -268,8 +268,8 @@ def test_fallback_ssh():
 
 PARITY_PLAYBOOK = os.path.join(PLAYBOOK_DIR, 'parity.yml')
 PARITY_PLUGINS = [
-    'copy', 'copy_src', 'template', 'lineinfile', 'stat', 'slurp', 'fetch', 'get_url',
-    'command', 'command_env', 'shell',
+    'copy', 'copy_src', 'copy_dir', 'copy_dir_slash', 'template', 'lineinfile',
+    'stat', 'slurp', 'fetch', 'get_url', 'command', 'command_env', 'shell',
 ]
 FAST_PLUGIN_MARKER = '__produced_by_fast_plugin'
 

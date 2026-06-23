@@ -50,6 +50,16 @@ class TestCommandFastPath:
         assert result['failed'] is True
         assert result['rc'] == 1
 
+    def test_failed_command_is_still_marked(self):
+        # A non-zero command rc is the command's outcome, not a fallback, so the
+        # result must carry the marker (otherwise a failed_when:-rescued failure
+        # is misreported as a fallback by the summary callback).
+        action = make_action('command', {'argv': ['sh', '-c', 'exit 7']})
+        result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert result['rc'] == 7
+        assert result[FAST_PLUGIN_MARKER] is True
+
     def test_stderr_captured(self):
         action = make_action('command', {'argv': ['/bin/sh', '-c', 'echo err >&2']})
         result = action.run(task_vars={})
