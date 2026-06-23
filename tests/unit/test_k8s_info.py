@@ -17,7 +17,7 @@ import importlib.util
 _PLUGIN_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', '..',
                  'ansible', 'collections', 'ansible_collections',
-                 'kubernetes', 'core', 'plugins', 'action', 'k8s_info.py')
+                 'aflp', 'kubernetes_core', 'plugins', 'action', 'k8s_info.py')
 )
 _spec = importlib.util.spec_from_file_location('_aflp_k8s_info', _PLUGIN_PATH)
 _mod = importlib.util.module_from_spec(_spec)
@@ -26,12 +26,12 @@ _spec.loader.exec_module(_mod)
 from tests.conftest import (
     COLLECTION_PLUGIN_DIRS,
     FAST_PLUGIN_MARKER,
+    _load_plugin,
     make_action,
     mock_collection_run,
-    shadow_collection_import,
 )
 
-PLUGIN_DIR = COLLECTION_PLUGIN_DIRS['kubernetes.core']
+PLUGIN_DIR = COLLECTION_PLUGIN_DIRS['aflp.kubernetes_core']
 FQCN = 'kubernetes.core.plugins.action.k8s_info'
 
 
@@ -99,10 +99,20 @@ class TestKubectlGet:
         assert result == []
 
     def test_kubectl_failure_raises_runtime_error(self):
-        fail = MagicMock(returncode=1, stderr='not found', stdout='')
+        fail = MagicMock(returncode=1, stderr='server unreachable', stdout='')
         with patch('subprocess.run', return_value=fail):
-            with pytest.raises(RuntimeError, match='not found'):
+            with pytest.raises(RuntimeError, match='server unreachable'):
                 self._call()
+
+    def test_named_resource_not_found_returns_empty(self):
+        # kubectl exits non-zero with an API (NotFound) for a missing named
+        # resource; genuine k8s_info treats that as an empty result, not an error.
+        notfound = MagicMock(
+            returncode=1, stdout='',
+            stderr='Error from server (NotFound): pods "secret-unsealer-0" not found')
+        with patch('subprocess.run', return_value=notfound):
+            result = self._call(name='secret-unsealer-0')
+        assert result == []
 
     def test_invalid_json_raises_runtime_error(self):
         bad = MagicMock(returncode=0, stdout='not-json', stderr='')
@@ -178,6 +188,23 @@ class TestK8sInfoFastPath:
         assert result['failed'] is True
         assert 'server unreachable' in result['msg']
 
+    def test_named_resource_not_found_returns_empty_resources(self):
+        # Regression: `until: r.resources | length == 0` failed with
+        # "object of type 'dict' has no attribute 'resources'" because a NotFound
+        # for a named resource was returned as a failure (no resources key)
+        # instead of resources: [] like genuine kubernetes.core.k8s_info does.
+        notfound = MagicMock(
+            returncode=1, stdout='',
+            stderr='Error from server (NotFound): pods "secret-unsealer-0" not found')
+        action = _action({'kind': 'Pod', 'name': 'secret-unsealer-0', 'namespace': 'default'})
+        with patch('subprocess.run', return_value=notfound):
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['resources'] == []
+        assert result['changed'] is False
+        # The marker must still be present (fast path handled it).
+        assert result[FAST_PLUGIN_MARKER] is True
+
     def test_non_core_api_version(self):
         items = [{'kind': 'Deployment', 'metadata': {'name': 'd1'}}]
         action = _action({'kind': 'Deployment', 'api_version': 'apps/v1', 'namespace': 'default'})
@@ -224,63 +251,16 @@ class TestK8sInfoFastPath:
         assert FAST_PLUGIN_MARKER not in result
 
 
-# ------------------------------------------------------------------ #
-# Fallback self-recursion (regression for 'maximum recursion depth     #
-# exceeded')                                                            #
-# ------------------------------------------------------------------ #
-class TestK8sInfoFallbackRecursion:
-    """Regression tests for 'Task failed: maximum recursion depth exceeded'.
+class TestK8sInfoGenuineMissing:
+    """The overrides now live in aflp.kubernetes_core and delegate to the genuine
+    kubernetes.core collection for non-local / become tasks. When that collection
+    is absent, a non-local task fails with an actionable message rather than
+    running or recursing into itself."""
 
-    Seen in production looping k8s_info over the nodes of a >40-node cluster
-    on localhost under a become-enabled play: the fallback gate fired, the
-    fallback import resolved to this same plugin (the collection shadows
-    kubernetes.core), and run() delegated to itself until Python's recursion
-    limit. When self-shadowed, become on a local connection must use the
-    fast path and non-local connections must fail with an actionable
-    message — neither may delegate.
-    """
-
-    def test_become_uses_fast_path_when_self_shadowed(self):
-        obj = {'kind': 'Node', 'metadata': {'name': 'phantom-ce-01-w30'}}
-        action = _action(
-            {'kind': 'Node', 'api_version': 'v1', 'name': 'phantom-ce-01-w30'},
-            become=True,
-        )
-        with shadow_collection_import(FQCN, _mod):
-            with patch('subprocess.run', return_value=_kubectl_single(obj)):
-                result = action.run(task_vars={})
-        assert not result.get('failed'), result
-        assert result['resources'][0]['metadata']['name'] == 'phantom-ce-01-w30'
-
-    def test_non_local_fails_cleanly_when_self_shadowed(self):
-        action = _action(
-            {'kind': 'Node', 'api_version': 'v1', 'name': 'phantom-ce-01-w30'},
-            local=False,
-        )
-        with shadow_collection_import(FQCN, _mod):
-            result = action.run(task_vars={})
+    def test_non_local_without_genuine_fails(self, monkeypatch):
+        mod = _load_plugin('k8s_info', plugin_dir=PLUGIN_DIR)
+        monkeypatch.setattr(mod, '_load_standard_action', lambda: None)
+        action = _action({'kind': 'Node', 'api_version': 'v1', 'name': 'x'}, local=False)
+        result = action.run(task_vars={})
         assert result['failed'] is True
-        assert 'local connection' in result['msg']
-
-
-# ------------------------------------------------------------------ #
-# Fallback                                                             #
-# ------------------------------------------------------------------ #
-class TestK8sInfoFallback:
-    def test_delegates_for_non_local(self):
-        action = _action({'kind': 'Pod'}, local=False)
-        with mock_collection_run(FQCN, {'changed': False, 'resources': []}) as mock:
-            action.run(task_vars={})
-        mock.assert_called_once()
-
-    def test_delegates_for_become(self):
-        action = _action({'kind': 'Pod'}, become=True)
-        with mock_collection_run(FQCN, {'changed': False, 'resources': []}) as mock:
-            action.run(task_vars={})
-        mock.assert_called_once()
-
-    def test_fallback_result_is_unmarked(self):
-        action = _action({'kind': 'Pod'}, local=False)
-        with mock_collection_run(FQCN, {'changed': False, 'resources': []}):
-            result = action.run(task_vars={})
-        assert FAST_PLUGIN_MARKER not in result
+        assert 'not installed' in result['msg']

@@ -1,0 +1,25 @@
+---
+# Fallback to genuine: run under AFLP_DISABLE=1 (set by the test). The redirect
+# still routes kubernetes.core.k8s_info to the fast override, but the kill-switch
+# forces its local gate to fall through and delegate to the GENUINE kubernetes.core
+# collection (installed via requirements.yml). The task therefore returns real
+# cluster data WITHOUT the fast-path marker — proving delegation reaches the
+# genuine plugin instead of failing or recursing.
+- name: Fast overrides delegate to genuine kubernetes.core under AFLP_DISABLE
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    - name: List pods via kubernetes.core.k8s_info (delegates to genuine)
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: kube-system
+        kubeconfig: /kubeconfig/config
+      register: r
+
+    - name: Assert the genuine collection ran (real data, no fast marker)
+      assert:
+        that:
+          - not r.failed | default(false)
+          - r.resources | length >= 1
+          - "'__produced_by_fast_plugin' not in r"

@@ -7,7 +7,7 @@ import stat as stat_module
 import sys
 import tempfile
 
-from ansible.module_utils.common.text.converters import to_native
+from ansible.module_utils.common.text.converters import to_native, to_text
 
 # Result key stamped onto every successful fast (in-process) result so tests can
 # confirm the fast action plugin actually handled the task rather than the
@@ -90,7 +90,7 @@ def _strict_enabled():
     return os.environ.get(_STRICT_ENV, '').strip().lower() in _TRUTHY
 
 
-def strict_guard(connection, play_context, task=None):
+def strict_guard(connection, play_context, task=None, extra_reasons=None):
     """Raise instead of falling back to stock, when AFLP_STRICT is set.
 
     Call this at the top of a fast plugin's fallback branch, just before it
@@ -98,6 +98,11 @@ def strict_guard(connection, play_context, task=None):
     is an *intentional* global fallback, so it suppresses the guard (the two are
     not meant to be combined). The raised error reports a best-effort reason so
     the offending task is easy to diagnose.
+
+    `extra_reasons` (a str or list of str) lets a plugin add plugin-specific
+    causes the generic detection below can't see — e.g. copy's `remote_src` or a
+    directory source — so the message names the real trigger instead of the
+    catch-all "unsupported arguments".
     """
     if not _strict_enabled() or _fast_disabled():
         return
@@ -110,12 +115,44 @@ def strict_guard(connection, play_context, task=None):
         reasons.append('check_mode')
     if task is not None and getattr(task, 'async_val', 0):
         reasons.append('async')
+    if extra_reasons:
+        if isinstance(extra_reasons, str):
+            extra_reasons = [extra_reasons]
+        reasons.extend(extra_reasons)
     reason = ', '.join(reasons) or 'unsupported arguments'
     from ansible.errors import AnsibleActionFail
     raise AnsibleActionFail(
         'AFLP_STRICT: this task would fall back from a fast local plugin to '
         'stock ansible-core (%s); refusing because AFLP_STRICT is set, so '
         'unintended fallbacks are caught rather than silently run slow.' % reason)
+
+
+def resolve_environment(task, templar):
+    """Template and merge ``task.environment`` into a plain {str: str} dict for
+    ``subprocess.run(env=...)``.
+
+    ``environment`` is a list of dicts (play/block/task levels), applied in order
+    so a later level wins — matching ansible-core's own merge. Each dict is
+    templated against the current vars (so values like ``{{ password }}`` are
+    resolved). Empty/zero-length dicts are skipped (ansible-core sets
+    ``environment=[{}]`` by default, meaning "no extra vars"). Returns {} when
+    there is nothing to add, so the caller can pass ``env=None`` and inherit the
+    process environment unchanged.
+    """
+    final = {}
+    environments = getattr(task, 'environment', None)
+    if environments is None:
+        return final
+    if not isinstance(environments, list):
+        environments = [environments]
+    for env in environments:
+        if not env:
+            continue
+        templated = templar.template(env)
+        if isinstance(templated, dict):
+            for k, v in templated.items():
+                final[to_text(k)] = to_text(v)
+    return final
 
 
 def _parse_mode(mode):

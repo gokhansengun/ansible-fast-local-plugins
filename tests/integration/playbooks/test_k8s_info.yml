@@ -95,6 +95,30 @@
           - r_labeled.resources is iterable
 
     # ------------------------------------------------------------------ #
+    # Named resource that does not exist → resources: [] (NOT a failure). #
+    # Regression: an `until: r.resources | length == 0` wait failed with  #
+    # "object of type 'dict' has no attribute 'resources'" because a       #
+    # NotFound was returned as a failure with no resources key.            #
+    # ------------------------------------------------------------------ #
+    - name: Look up a pod that does not exist (by name)
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: kube-system
+        name: definitely-not-a-real-pod-aflp
+        kubeconfig: /kubeconfig/config
+      register: r_absent
+      until: r_absent.resources | length == 0
+      retries: 2
+      delay: 1
+
+    - name: Assert a missing named pod returns an empty list, not a failure
+      assert:
+        that:
+          - not r_absent.failed | default(false)
+          - r_absent.resources | length == 0
+          - r_absent['__produced_by_fast_plugin'] | default(false)
+
+    # ------------------------------------------------------------------ #
     # Missing kind → must fail                                            #
     # ------------------------------------------------------------------ #
     - name: Call without kind (expect failure)

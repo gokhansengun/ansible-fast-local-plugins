@@ -9,7 +9,7 @@ from ansible.utils.display import Display
 
 display = Display()
 
-FAST_HELM_PULL_VERSION = '1.0'
+FAST_HELM_REPOSITORY_VERSION = '1.0'
 
 
 def _is_local(connection):
@@ -46,16 +46,18 @@ def _strict_guard(connection, play_context):
 
 
 def _load_standard_action():
-    """Import the genuine kubernetes.core helm_pull action plugin class.
+    """Import the genuine kubernetes.core helm_repository action plugin class for delegation.
 
-    Returns None when the import resolves back to this override: this
-    collection is typically installed *as* kubernetes.core (shadowing the
-    genuine collection, which need not be installed at all), so delegating
-    would mean the plugin instantiating itself until the interpreter
-    recursion limit ('maximum recursion depth exceeded').
+    These fast plugins live in the separate `aflp.kubernetes_core` collection and
+    are routed onto the `kubernetes.core.helm_repository` action by the
+    `aflp_kubernetes_redirect` callback, so this import resolves to the *genuine*
+    collection (a real installed dependency), never back to ourselves. Returns
+    None only when that collection is absent, in which case the caller fails with
+    an actionable message.
     """
-    from ansible_collections.kubernetes.core.plugins.action.helm_pull import ActionModule as _Standard
-    if getattr(_Standard, '_FAST_LOCAL_OVERRIDE', None) is True:
+    try:
+        from ansible_collections.kubernetes.core.plugins.action.helm_repository import ActionModule as _Standard
+    except ImportError:
         return None
     return _Standard
 
@@ -70,9 +72,6 @@ def mark_fast_result(result):
 
 class ActionModule(ActionBase):
     TRANSFERS_FILES = False
-    # Marks this class (and any separately-loaded copy of this file) as the
-    # fast override so _load_standard_action can detect self-shadowing.
-    _FAST_LOCAL_OVERRIDE = True
 
     def run(self, tmp=None, task_vars=None):
         if task_vars is None:
@@ -85,8 +84,8 @@ class ActionModule(ActionBase):
         args = self._task.args
 
         display.debug(
-            'fast_helm_pull v%s: transport=%r  _load_name=%r  class=%s.%s' % (
-                FAST_HELM_PULL_VERSION,
+            'fast_helm_repository v%s: transport=%r  _load_name=%r  class=%s.%s' % (
+                FAST_HELM_REPOSITORY_VERSION,
                 getattr(conn, 'transport', 'N/A'),
                 getattr(conn, '_load_name', 'N/A'),
                 type(conn).__module__,
@@ -96,7 +95,7 @@ class ActionModule(ActionBase):
 
         if not _is_local(conn) or self._play_context.become:
             _strict_guard(conn, self._play_context)
-            display.debug('fast_helm_pull: non-local or become, delegating to collection plugin')
+            display.debug('fast_helm_repository: non-local or become, delegating to collection plugin')
             _Standard = _load_standard_action()
             if _Standard is not None:
                 std = _Standard(
@@ -106,14 +105,14 @@ class ActionModule(ActionBase):
                 return std.run(task_vars=task_vars)
             if not _is_local(conn):
                 return dict(failed=True, msg=(
-                    'kubernetes.core.helm_pull is provided by the fast local '
-                    'override, which only supports local connections, and no genuine '
-                    'kubernetes.core collection is installed to fall back to. '
+                    'kubernetes.core.helm_repository is provided by the fast local '
+                    'override, which only supports local connections, and the genuine '
+                    'kubernetes.core collection is not installed to delegate to. '
                     'Run the task on the controller (e.g. delegate_to: localhost) '
-                    'or install the genuine collection ahead of this override.'
+                    'or install the genuine kubernetes.core collection.'
                 ))
             display.warning(
-                'fast_helm_pull: become cannot be honoured because no genuine '
+                'fast_helm_repository: become cannot be honoured because no genuine '
                 'kubernetes.core collection is installed; running helm as the '
                 'connecting user instead of the become user'
             )
@@ -121,42 +120,27 @@ class ActionModule(ActionBase):
         return mark_fast_result(self._run_local(args, result))
 
     def _run_local(self, args, result):
-        display.debug('fast_helm_pull: local connection, calling helm directly')
+        display.debug('fast_helm_repository: local connection, calling helm directly')
 
-        chart_ref = args.get('chart_ref')
+        name = args.get('name') or args.get('repo_name')
+        repo_url = args.get('repo_url')
         binary_path = args.get('binary_path') or 'helm'
 
-        if not chart_ref:
-            return dict(failed=True, msg='chart_ref is required')
+        if not name or not repo_url:
+            return dict(failed=True, msg='name and repo_url are required')
 
-        cmd = [binary_path, 'pull', chart_ref]
+        cmd = [binary_path, 'repo', 'add', name, repo_url]
 
-        if args.get('chart_version'):
-            cmd += ['--version', args['chart_version']]
-        if args.get('repo_url'):
-            cmd += ['--repo', args['repo_url']]
         if args.get('repo_username'):
             cmd += ['--username', args['repo_username']]
         if args.get('repo_password'):
             cmd += ['--password', args['repo_password']]
         if args.get('pass_credentials'):
             cmd.append('--pass-credentials')
-        if args.get('provenance'):
-            cmd.append('--prov')
-        if args.get('verify_chart'):
-            cmd.append('--verify')
-        if args.get('verify_chart_keyring'):
-            cmd += ['--keyring', args['verify_chart_keyring']]
-        if args.get('chart_devel'):
-            cmd.append('--devel')
-        if args.get('skip_tls_certs_check') or args.get('insecure_skip_tls_verify'):
+        if args.get('insecure_skip_tls_verify'):
             cmd.append('--insecure-skip-tls-verify')
-        if args.get('untar'):
-            cmd.append('--untar')
-        if args.get('untar_dir'):
-            cmd += ['--untardir', args['untar_dir']]
-        if args.get('chart_destination') or args.get('destination'):
-            cmd += ['--destination', args.get('chart_destination') or args['destination']]
+        if args.get('force_update'):
+            cmd.append('--force-update')
         if args.get('ca_cert'):
             cmd += ['--ca-file', args['ca_cert']]
 
@@ -168,8 +152,7 @@ class ActionModule(ActionBase):
         if proc.returncode != 0:
             return dict(
                 failed=True,
-                msg='helm pull failed: %s' % proc.stderr.strip(),
-                command=' '.join(cmd),
+                msg='helm repo add failed: %s' % proc.stderr.strip(),
                 stdout=proc.stdout,
                 stderr=proc.stderr,
                 rc=proc.returncode,
@@ -177,7 +160,8 @@ class ActionModule(ActionBase):
 
         result.update(dict(
             changed=True,
-            command=' '.join(cmd),
+            repo_name=name,
+            repo_url=repo_url,
             stdout=proc.stdout,
             stderr=proc.stderr,
             rc=proc.returncode,

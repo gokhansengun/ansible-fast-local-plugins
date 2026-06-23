@@ -1,0 +1,24 @@
+---
+# Transparency: a role keeps writing kubernetes.core.* and still gets the fast
+# path. The aflp_kubernetes_redirect callback rewrites kubernetes.core.k8s_info
+# -> aflp.kubernetes_core.k8s_info at action-loader time, so the fast override
+# handles it (marker present) even though the genuine kubernetes.core collection
+# is also installed.
+- name: kubernetes.core.* routes to the fast aflp.kubernetes_core overrides
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    - name: List pods via kubernetes.core.k8s_info (must hit the fast path)
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: kube-system
+        kubeconfig: /kubeconfig/config
+      register: r
+
+    - name: Assert the fast override handled it (redirect fired)
+      assert:
+        that:
+          - not r.failed | default(false)
+          - r.resources | length >= 1
+          - r['__produced_by_fast_plugin'] | default(false)

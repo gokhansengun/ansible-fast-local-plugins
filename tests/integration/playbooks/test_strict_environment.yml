@@ -1,0 +1,22 @@
+---
+# The helm-repo case: a shell task whose only previously-unsupported feature is an
+# `environment:` block. It must now run ON THE FAST PATH (in-process), so even
+# under AFLP_STRICT=1 (set by the test) it does not fall back or fail — it honors
+# the env var directly.
+- name: shell with environment runs on the fast path even under strict mode
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    - name: Shell using an environment var (fast path, no fallback)
+      shell:
+        cmd: 'echo "$HELM_PASSWORD"'
+      environment:
+        HELM_PASSWORD: "s3cr3t"
+      register: r
+
+    - name: Assert the env var was honored on the fast path
+      assert:
+        that:
+          - r.stdout == 's3cr3t'
+          - r['__produced_by_fast_plugin'] | default(false)

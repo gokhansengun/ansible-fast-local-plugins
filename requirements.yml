@@ -1,0 +1,8 @@
+---
+# Genuine upstream kubernetes.core, installed alongside the fast
+# aflp.kubernetes_core overrides so non-local / become tasks can delegate to it.
+# The aflp.kubernetes_core collection itself is loaded from source via
+# collections_path (ansible.cfg) and is NOT installed from Galaxy.
+collections:
+  - name: kubernetes.core
+    version: "5.3.0"

@@ -14,7 +14,7 @@ from ansible.utils.display import Display
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
-from _action_utils import _is_local, _load_builtin_action, mark_fast_result, strict_guard  # noqa: E402
+from _action_utils import _is_local, _load_builtin_action, mark_fast_result, resolve_environment, strict_guard  # noqa: E402
 
 display = Display()
 
@@ -45,14 +45,10 @@ class ActionModule(ActionBase):
             )
         )
 
-        # Fall back for: non-local, become, async, check_mode, or non-empty environment.
-        # ansible-core 2.19+ sets task.environment=[{}] by default (empty dict in a list),
-        # which is truthy but means "no extra vars" — only fall back for genuinely populated
-        # environment dicts.
-        real_env = any(self._task.environment or [])
+        # Fall back for: non-local, become, async, or check_mode. `environment:`
+        # is handled in-process (see _run_local), so it no longer forces a fallback.
         if (not _is_local(conn) or self._play_context.become
-                or self._task.async_val or self._play_context.check_mode
-                or real_env):
+                or self._task.async_val or self._play_context.check_mode):
             display.debug('fast_command: delegating to standard command plugin')
             strict_guard(conn, self._play_context, self._task)
             _Standard = _load_builtin_action('command').ActionModule
@@ -79,7 +75,15 @@ class ActionModule(ActionBase):
                 return dict(failed=True, msg='no command given')
             cmd = shlex.split(raw)
 
+        # chdir (often via `args: {chdir: ...}`) is a path arg, so expand ~ and env
+        # vars to match stock; fail clearly on a missing dir.
         chdir = args.get('chdir')
+        if chdir:
+            chdir = os.path.expanduser(os.path.expandvars(chdir))
+            if not os.path.isdir(chdir):
+                return dict(failed=True, rc=257,
+                            msg='Unable to change directory before execution: '
+                                '%s does not exist or is not a directory' % chdir)
         creates = args.get('creates')
         removes = args.get('removes')
         stdin_data = args.get('stdin')
@@ -105,6 +109,14 @@ class ActionModule(ActionBase):
                 s += '\n'
             stdin_bytes = to_bytes(s, errors='surrogate_or_strict')
 
+        # Apply `environment:` on top of the inherited process env (later levels
+        # win, matching ansible). env=None inherits os.environ unchanged.
+        env_overrides = resolve_environment(self._task, self._templar)
+        run_env = None
+        if env_overrides:
+            run_env = os.environ.copy()
+            run_env.update(env_overrides)
+
         start = datetime.datetime.now()
         try:
             proc = subprocess.run(
@@ -113,6 +125,7 @@ class ActionModule(ActionBase):
                 cwd=chdir,
                 input=stdin_bytes,
                 capture_output=True,
+                env=run_env,
             )
         except Exception as e:
             return dict(failed=True, msg='error running command: %s' % to_native(e))

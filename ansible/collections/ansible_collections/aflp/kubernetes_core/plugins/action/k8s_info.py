@@ -47,16 +47,18 @@ def _strict_guard(connection, play_context):
 
 
 def _load_standard_action():
-    """Import the genuine kubernetes.core k8s_info action plugin class.
+    """Import the genuine kubernetes.core k8s_info action plugin class for delegation.
 
-    Returns None when the import resolves back to this override: this
-    collection is typically installed *as* kubernetes.core (shadowing the
-    genuine collection, which need not be installed at all), so delegating
-    would mean the plugin instantiating itself until the interpreter
-    recursion limit ('maximum recursion depth exceeded').
+    These fast plugins live in the separate `aflp.kubernetes_core` collection and
+    are routed onto the `kubernetes.core.k8s_info` action by the
+    `aflp_kubernetes_redirect` callback, so this import resolves to the *genuine*
+    collection (a real installed dependency), never back to ourselves. Returns
+    None only when that collection is absent, in which case the caller fails with
+    an actionable message.
     """
-    from ansible_collections.kubernetes.core.plugins.action.k8s_info import ActionModule as _Standard
-    if getattr(_Standard, '_FAST_LOCAL_OVERRIDE', None) is True:
+    try:
+        from ansible_collections.kubernetes.core.plugins.action.k8s_info import ActionModule as _Standard
+    except ImportError:
         return None
     return _Standard
 
@@ -98,6 +100,12 @@ def _kubectl_get(kind, api_version, name, namespace, label_selectors,
         raise RuntimeError('failed to run kubectl: %s' % to_native(e))
 
     if proc.returncode != 0:
+        # A NotFound for a named resource is not an error: genuine k8s_info
+        # returns an empty list so callers can do `until: r.resources | length == 0`.
+        # The API status reason '(NotFound)' is specific to a missing resource and
+        # won't match unrelated failures (e.g. a missing kubeconfig file).
+        if '(NotFound)' in (proc.stderr or ''):
+            return []
         raise RuntimeError(proc.stderr.strip())
 
     try:
@@ -119,9 +127,6 @@ def mark_fast_result(result):
 
 class ActionModule(ActionBase):
     TRANSFERS_FILES = False
-    # Marks this class (and any separately-loaded copy of this file) as the
-    # fast override so _load_standard_action can detect self-shadowing.
-    _FAST_LOCAL_OVERRIDE = True
 
     def run(self, tmp=None, task_vars=None):
         if task_vars is None:
@@ -156,10 +161,10 @@ class ActionModule(ActionBase):
             if not _is_local(conn):
                 return dict(failed=True, msg=(
                     'kubernetes.core.k8s_info is provided by the fast local override, '
-                    'which only supports local connections, and no genuine '
-                    'kubernetes.core collection is installed to fall back to. '
+                    'which only supports local connections, and the genuine '
+                    'kubernetes.core collection is not installed to delegate to. '
                     'Run the task on the controller (e.g. delegate_to: localhost) '
-                    'or install the genuine collection ahead of this override.'
+                    'or install the genuine kubernetes.core collection.'
                 ))
             display.warning(
                 'fast_k8s_info: become cannot be honoured because no genuine '

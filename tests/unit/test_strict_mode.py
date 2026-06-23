@@ -98,9 +98,9 @@ class TestStrictSuppressedByDisable:
 # ---------------------------------------------------------------------------
 
 class TestStrictK8sOverrides:
-    @pytest.mark.parametrize('name', ['k8s', 'k8s_info', 'helm_repository'])
+    @pytest.mark.parametrize('name', ['k8s', 'k8s_info', 'helm_repository', 'helm_pull', 'helm_info'])
     def test_strict_guard_raises_non_local(self, strict, name):
-        mod = _load_plugin(name, plugin_dir=COLLECTION_PLUGIN_DIRS['kubernetes.core'])
+        mod = _load_plugin(name, plugin_dir=COLLECTION_PLUGIN_DIRS['aflp.kubernetes_core'])
         conn = MagicMock()
         conn.transport = 'ssh'
         conn._load_name = 'ssh'
@@ -109,20 +109,20 @@ class TestStrictK8sOverrides:
         with pytest.raises(AnsibleActionFail, match='AFLP_STRICT'):
             mod._strict_guard(conn, pc)
 
-    @pytest.mark.parametrize('name', ['k8s', 'k8s_info', 'helm_repository'])
+    @pytest.mark.parametrize('name', ['k8s', 'k8s_info', 'helm_repository', 'helm_pull', 'helm_info'])
     def test_strict_guard_suppressed_by_disable(self, strict, monkeypatch, name):
         monkeypatch.setenv('AFLP_DISABLE', '1')
-        mod = _load_plugin(name, plugin_dir=COLLECTION_PLUGIN_DIRS['kubernetes.core'])
+        mod = _load_plugin(name, plugin_dir=COLLECTION_PLUGIN_DIRS['aflp.kubernetes_core'])
         conn = MagicMock()
         conn.transport = 'ssh'
         pc = MagicMock()
         pc.become = True
         mod._strict_guard(conn, pc)  # must not raise
 
-    @pytest.mark.parametrize('name', ['k8s', 'k8s_info', 'helm_repository'])
+    @pytest.mark.parametrize('name', ['k8s', 'k8s_info', 'helm_repository', 'helm_pull', 'helm_info'])
     def test_strict_guard_noop_when_unset(self, monkeypatch, name):
         monkeypatch.delenv('AFLP_STRICT', raising=False)
-        mod = _load_plugin(name, plugin_dir=COLLECTION_PLUGIN_DIRS['kubernetes.core'])
+        mod = _load_plugin(name, plugin_dir=COLLECTION_PLUGIN_DIRS['aflp.kubernetes_core'])
         conn = MagicMock()
         conn.transport = 'ssh'
         pc = MagicMock()

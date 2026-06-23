@@ -1,0 +1,7 @@
+namespace: aflp
+name: kubernetes_core
+version: 1.0.0
+readme: README.md
+authors:
+  - ansible-fast-local-plugins
+description: Fast in-process kubectl/helm action plugins that shadow kubernetes.core for local connections

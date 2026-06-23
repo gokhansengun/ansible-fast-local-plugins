@@ -45,6 +45,23 @@
             content: "{{ {'result': r, 'sidecar': {'checksum': sc.stat.checksum, 'mode': sc.stat.mode}} | to_nice_json }}"
             dest: "{{ result_out }}"
 
+    # -------------------------------------------------------------- copy_src -
+    - name: copy_src
+      when: parity_plugin == 'copy_src'
+      block:
+        - copy:
+            content: "parity copy_src payload\nsecond line\n"
+            dest: "{{ work_dir }}/source_file"
+        - copy:
+            src: "{{ work_dir }}/source_file"
+            dest: "{{ work_dir }}/out"
+          register: r
+        - stat: { path: "{{ work_dir }}/out", checksum_algorithm: sha256 }
+          register: sc
+        - copy:
+            content: "{{ {'result': r, 'sidecar': {'checksum': sc.stat.checksum, 'mode': sc.stat.mode}} | to_nice_json }}"
+            dest: "{{ result_out }}"
+
     # ------------------------------------------------------------ template ---
     - name: template
       when: parity_plugin == 'template'
@@ -144,6 +161,21 @@
       when: parity_plugin == 'command'
       block:
         - command: "echo parity-command"
+          register: r
+        - copy:
+            content: "{{ {'result': r, 'sidecar': none} | to_nice_json }}"
+            dest: "{{ result_out }}"
+
+    # ----------------------------------------------------------- command_env -
+    - name: command_env
+      when: parity_plugin == 'command_env'
+      block:
+        - command:
+            argv:
+              - printenv
+              - PARITY_TOKEN
+          environment:
+            PARITY_TOKEN: parity-value
           register: r
         - copy:
             content: "{{ {'result': r, 'sidecar': none} | to_nice_json }}"

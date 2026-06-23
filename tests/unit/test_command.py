@@ -60,6 +60,20 @@ class TestCommandFastPath:
         result = action.run(task_vars={})
         assert os.path.realpath(result['stdout']) == os.path.realpath(str(tmp_path))
 
+    def test_chdir_expands_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('AFLP_CHDIR', str(tmp_path))
+        action = make_action('command', {'_raw_params': 'pwd', 'chdir': '$AFLP_CHDIR'})
+        result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert os.path.realpath(result['stdout']) == os.path.realpath(str(tmp_path))
+
+    def test_chdir_missing_directory_fails(self, tmp_path):
+        action = make_action('command',
+                             {'_raw_params': 'pwd', 'chdir': str(tmp_path / 'nope')})
+        result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert 'change directory' in result['msg']
+
     def test_creates_skips_when_file_exists(self, tmp_path):
         existing = tmp_path / 'existing.txt'
         existing.write_text('x')
@@ -144,16 +158,42 @@ class TestCommandFallback:
             action.run(task_vars={})
         mock.assert_called_once()
 
-    def test_delegates_with_environment(self):
-        action = make_action('command', {'_raw_params': 'echo x'},
-                             environment=[{'X': '1'}])
-        with mock_builtin_run('command', {'rc': 0}) as mock:
-            action.run(task_vars={})
-        mock.assert_called_once()
-
     def test_fallback_result_is_unmarked(self):
         action = make_action('command', {'_raw_params': 'echo x'}, local=False)
         with mock_builtin_run('command', {'rc': 0}) as mock:
             result = action.run(task_vars={})
         mock.assert_called_once()
         assert FAST_PLUGIN_MARKER not in result
+
+
+class TestCommandEnvironment:
+    """`environment:` is now applied in-process (no fallback to stock)."""
+
+    def test_environment_var_visible_to_command(self):
+        action = make_action('command', {'argv': ['printenv', 'TOKEN']},
+                             environment=[{'TOKEN': 'abc123'}])
+        result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['stdout'] == 'abc123'
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_environment_layers_later_wins(self):
+        action = make_action('command', {'argv': ['printenv', 'X']},
+                             environment=[{'X': 'first'}, {'X': 'second'}])
+        result = action.run(task_vars={})
+        assert result['stdout'] == 'second'
+
+    def test_empty_environment_default_is_ignored(self):
+        action = make_action('command', {'_raw_params': 'echo hi'}, environment=[{}])
+        result = action.run(task_vars={})
+        assert result['stdout'] == 'hi'
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_environment_does_not_fall_back_under_strict(self, monkeypatch):
+        monkeypatch.setenv('AFLP_STRICT', '1')
+        action = make_action('command', {'argv': ['printenv', 'X']},
+                             environment=[{'X': 'ok'}])
+        result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['stdout'] == 'ok'
+        assert result[FAST_PLUGIN_MARKER] is True

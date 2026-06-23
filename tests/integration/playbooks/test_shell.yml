@@ -50,6 +50,46 @@
         that:
           - work_dir in r_pwd.stdout
 
+    # --- chdir supplied via the `args:` form (free-form cmd + args block) ---
+    - name: Run pwd with chdir supplied via args
+      shell: pwd
+      args:
+        chdir: "{{ work_dir }}"
+      register: r_pwd_args
+
+    - name: Assert chdir via args runs on the fast path in the right dir
+      assert:
+        that:
+          - work_dir in r_pwd_args.stdout
+          - r_pwd_args['__produced_by_fast_plugin'] | default(false)
+
+    # --- chdir is path-expanded (env vars) on the fast path ---
+    - name: Run pwd with chdir using an env-var path
+      shell: pwd
+      args:
+        chdir: "$HOME"
+      register: r_pwd_home
+
+    - name: Assert $HOME was expanded for chdir
+      assert:
+        that:
+          - r_pwd_home.stdout == lookup('env', 'HOME')
+          - r_pwd_home['__produced_by_fast_plugin'] | default(false)
+
+    # --- a missing chdir fails clearly, not with a raw subprocess error ---
+    - name: Run with a nonexistent chdir (expect failure)
+      shell: pwd
+      args:
+        chdir: "{{ work_dir }}/does-not-exist"
+      register: r_badchdir
+      ignore_errors: true
+
+    - name: Assert missing chdir fails with a clear message
+      assert:
+        that:
+          - r_badchdir.failed
+          - "'change directory' in r_badchdir.msg"
+
     # --- creates ---
     - name: Create marker file
       copy:
@@ -90,6 +130,20 @@
       assert:
         that:
           - "'from stdin' in r_stdin.stdout"
+
+    # --- environment is applied in-process, including templated values ---
+    - name: Shell honoring a templated environment var on the fast path
+      shell:
+        cmd: 'echo "$GREETING"'
+      environment:
+        GREETING: "hello {{ work_dir | basename }}"
+      register: r_env
+
+    - name: Assert templated env var was honored on the fast path
+      assert:
+        that:
+          - r_env.stdout == ('hello ' ~ (work_dir | basename))
+          - r_env['__produced_by_fast_plugin'] | default(false)
 
     # --- timing fields ---
     - name: Assert timing fields present

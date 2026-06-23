@@ -115,6 +115,22 @@
         that:
           - "'from stdin' in r_stdin.stdout"
 
+    # --- environment is applied in-process ---
+    - name: Command honoring an environment var on the fast path
+      command:
+        argv:
+          - printenv
+          - TOKEN
+      environment:
+        TOKEN: "abc123"
+      register: r_env
+
+    - name: Assert env var was honored on the fast path
+      assert:
+        that:
+          - r_env.stdout == 'abc123'
+          - r_env['__produced_by_fast_plugin'] | default(false)
+
     # --- timing fields ---
     - name: Assert timing fields present
       assert:

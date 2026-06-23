@@ -99,17 +99,17 @@ class TestKillSwitchActionFallback:
 # ---------------------------------------------------------------------------
 
 class TestKillSwitchK8sOverrides:
-    @pytest.mark.parametrize('name', ['k8s', 'k8s_info', 'helm_repository'])
+    @pytest.mark.parametrize('name', ['k8s', 'k8s_info', 'helm_repository', 'helm_pull', 'helm_info'])
     def test_is_local_false_when_disabled(self, disabled, name):
-        mod = _load_plugin(name, plugin_dir=COLLECTION_PLUGIN_DIRS['kubernetes.core'])
+        mod = _load_plugin(name, plugin_dir=COLLECTION_PLUGIN_DIRS['aflp.kubernetes_core'])
         conn = MagicMock()
         conn.transport = 'local'
         assert mod._is_local(conn) is False
 
-    @pytest.mark.parametrize('name', ['k8s', 'k8s_info', 'helm_repository'])
+    @pytest.mark.parametrize('name', ['k8s', 'k8s_info', 'helm_repository', 'helm_pull', 'helm_info'])
     def test_is_local_true_when_enabled(self, monkeypatch, name):
         monkeypatch.delenv('AFLP_DISABLE', raising=False)
-        mod = _load_plugin(name, plugin_dir=COLLECTION_PLUGIN_DIRS['kubernetes.core'])
+        mod = _load_plugin(name, plugin_dir=COLLECTION_PLUGIN_DIRS['aflp.kubernetes_core'])
         conn = MagicMock()
         conn.transport = 'local'
         assert mod._is_local(conn) is True

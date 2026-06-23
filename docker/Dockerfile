@@ -27,18 +27,20 @@ RUN pip install --no-cache-dir \
     "ansible-core==${ANSIBLE_CORE_VERSION}" \
     "ansible-modules-hashivault==${HASHIVAULT_MODULE_VERSION}" \
     hvac \
+    kubernetes \
+    jsonpatch \
     pytest \
     pytest-mock \
     pytest-cov
 
-# Build and install our kubernetes.core collection from source so ansible-galaxy
-# sets up the proper MANIFEST.json and Python namespace structure. This avoids
-# shipping the real kubernetes.core collection (which requires the kubernetes pip
-# package and overrides our kubectl-based action plugins).
-COPY ansible/collections/ansible_collections/kubernetes/core/ /tmp/fast-kube-collection/
-RUN ansible-galaxy collection build /tmp/fast-kube-collection/ --output-path /tmp/ && \
-    ansible-galaxy collection install /tmp/kubernetes-core-1.0.0.tar.gz && \
-    rm -rf /tmp/fast-kube-collection /tmp/kubernetes-core-*.tar.gz
+# Install the GENUINE upstream kubernetes.core collection (into the default
+# ~/.ansible/collections, which ansible.cfg adds to collections_path). The fast
+# aflp.kubernetes_core overrides load from source via collections_path and route
+# kubernetes.core.* tasks to themselves through the aflp_kubernetes_redirect
+# callback; for non-local / become tasks they delegate to this genuine collection.
+COPY requirements.yml /tmp/requirements.yml
+RUN ansible-galaxy collection install -r /tmp/requirements.yml && \
+    rm -f /tmp/requirements.yml
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

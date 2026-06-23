@@ -21,9 +21,9 @@ if PLUGIN_DIR not in sys.path:
     sys.path.insert(0, PLUGIN_DIR)
 
 COLLECTION_PLUGIN_DIRS = {
-    'kubernetes.core': os.path.abspath(
+    'aflp.kubernetes_core': os.path.abspath(
         os.path.join(os.path.dirname(__file__), '..', 'ansible', 'collections',
-                     'ansible_collections', 'kubernetes', 'core', 'plugins', 'action')
+                     'ansible_collections', 'aflp', 'kubernetes_core', 'plugins', 'action')
     ),
 }
 

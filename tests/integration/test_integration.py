@@ -138,6 +138,15 @@ def test_strict_mode_fails_on_fallback():
 
 
 @pytest.mark.integration
+def test_environment_fast_path_under_strict():
+    """The helm-repo shell task: a task whose only previously-unsupported feature
+    is `environment:` now runs in-process. Even with AFLP_STRICT=1 it must NOT
+    fall back (and so must NOT fail) — the env var is honored on the fast path."""
+    _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_strict_environment.yml'),
+                          env={'AFLP_STRICT': '1'}))
+
+
+@pytest.mark.integration
 def test_fast_path_summary():
     """The aflp_fast_path_summary callback must print a per-action tally.
 
@@ -206,21 +215,12 @@ def test_helm_info():
 
 
 @pytest.mark.integration
-def test_helm_info_fallback_no_recursion():
-    """Replicates 'Task failed: maximum recursion depth exceeded'.
-
-    The fallback gate in the overriding kubernetes.core.helm_info action plugin
-    imports its own module (the collection shadows kubernetes.core), so any
-    become/non-local task delegates to itself until the recursion limit.
-    """
-    result = _run(os.path.join(PLAYBOOK_DIR, 'test_helm_info_fallback_recursion.yml'))
-    output = result.stdout + result.stderr
-    assert 'maximum recursion depth exceeded' not in output, (
-        f'helm_info fallback delegated to itself\n'
-        f'--- stdout ---\n{result.stdout}\n'
-        f'--- stderr ---\n{result.stderr}'
-    )
-    _assert_playbook(result)
+def test_kubernetes_fqcn_redirect():
+    """The aflp_kubernetes_redirect callback routes kubernetes.core.<name> tasks to
+    the fast aflp.kubernetes_core overrides without editing roles: a task written as
+    kubernetes.core.k8s_info carries the fast-path marker (proving the rewrite fired
+    and our plugin, not the genuine collection, handled it)."""
+    _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_kubernetes_redirect.yml')))
 
 
 @pytest.mark.integration
@@ -229,21 +229,16 @@ def test_k8s_info():
 
 
 @pytest.mark.integration
-def test_k8s_info_fallback_no_recursion():
-    """Replicates 'Task failed: maximum recursion depth exceeded'.
-
-    The fallback gate in the overriding kubernetes.core.k8s_info action plugin
-    imports its own module (the collection shadows kubernetes.core), so any
-    become/non-local task delegates to itself until the recursion limit.
-    """
-    result = _run(os.path.join(PLAYBOOK_DIR, 'test_k8s_info_fallback_recursion.yml'))
-    output = result.stdout + result.stderr
-    assert 'maximum recursion depth exceeded' not in output, (
-        f'k8s_info fallback delegated to itself\n'
-        f'--- stdout ---\n{result.stdout}\n'
-        f'--- stderr ---\n{result.stderr}'
-    )
-    _assert_playbook(result)
+def test_kubernetes_fallback_to_genuine():
+    """With AFLP_DISABLE=1 the fast overrides delegate to the genuine kubernetes.core
+    collection (a real installed dependency): the task still returns real cluster
+    data, but unmarked — proving it ran the genuine plugin, not the fast path, and
+    that delegation actually reaches the genuine collection rather than failing or
+    recursing."""
+    _assert_playbook(_run(
+        os.path.join(PLAYBOOK_DIR, 'test_kubernetes_fallback_genuine.yml'),
+        env={'AFLP_DISABLE': '1'},
+    ))
 
 
 @pytest.mark.integration
@@ -273,8 +268,8 @@ def test_fallback_ssh():
 
 PARITY_PLAYBOOK = os.path.join(PLAYBOOK_DIR, 'parity.yml')
 PARITY_PLUGINS = [
-    'copy', 'template', 'lineinfile', 'stat', 'slurp', 'fetch', 'get_url',
-    'command', 'shell',
+    'copy', 'copy_src', 'template', 'lineinfile', 'stat', 'slurp', 'fetch', 'get_url',
+    'command', 'command_env', 'shell',
 ]
 FAST_PLUGIN_MARKER = '__produced_by_fast_plugin'
 

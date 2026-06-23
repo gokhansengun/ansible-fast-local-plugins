@@ -9,17 +9,15 @@ sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), '../../ansible/plugins/action_plugins')
 ))
 
+from unittest.mock import patch
+
 from tests.conftest import (
     COLLECTION_PLUGIN_DIRS,
     FAST_PLUGIN_MARKER,
-    _load_plugin,
     make_action,
-    mock_collection_run,
-    shadow_collection_import,
 )
 
-PLUGIN_DIR = COLLECTION_PLUGIN_DIRS['kubernetes.core']
-FQCN = 'kubernetes.core.plugins.action.helm_pull'
+PLUGIN_DIR = COLLECTION_PLUGIN_DIRS['aflp.kubernetes_core']
 
 
 def _action(args, **kwargs):
@@ -115,46 +113,24 @@ class TestHelmPullFastPath:
 
 
 class TestHelmPullFallback:
+    """Genuine kubernetes.core.helm_pull is module-only (no action plugin), so the
+    override delegates via self._execute_module (the genuine module), not by
+    instantiating a standard action class like the other overrides."""
+
     def test_delegates_for_non_local(self):
         action = _action({'chart_ref': 'bitnami/nginx'}, local=False)
-        with mock_collection_run(FQCN, {'changed': True, 'rc': 0}) as mock:
+        with patch.object(action, '_execute_module', return_value={'changed': True}) as m:
             action.run(task_vars={})
-        mock.assert_called_once()
+        m.assert_called_once()
 
     def test_delegates_for_become(self):
         action = _action({'chart_ref': 'bitnami/nginx'}, become=True)
-        with mock_collection_run(FQCN, {'changed': True, 'rc': 0}) as mock:
+        with patch.object(action, '_execute_module', return_value={'changed': True}) as m:
             action.run(task_vars={})
-        mock.assert_called_once()
+        m.assert_called_once()
 
     def test_fallback_result_is_unmarked(self):
         action = _action({'chart_ref': 'bitnami/nginx'}, local=False)
-        with mock_collection_run(FQCN, {'changed': True, 'rc': 0}):
+        with patch.object(action, '_execute_module', return_value={'changed': True}):
             result = action.run(task_vars={})
         assert FAST_PLUGIN_MARKER not in result
-
-
-class TestHelmPullFallbackRecursion:
-    """When this collection shadows kubernetes.core, the fallback import resolves
-    to this very plugin; delegating used to recurse until 'maximum recursion depth
-    exceeded'. become on a local connection must use the fast path; non-local
-    connections must fail with an actionable message."""
-
-    def _shadow(self):
-        return shadow_collection_import(
-            FQCN, _load_plugin('helm_pull', plugin_dir=PLUGIN_DIR))
-
-    def test_become_uses_fast_path_when_self_shadowed(self, tmp_path):
-        action = _action({'chart_ref': 'bitnami/nginx',
-                          'binary_path': str(_fake_helm(tmp_path))}, become=True)
-        with self._shadow():
-            result = action.run(task_vars={})
-        assert not result.get('failed'), result
-        assert result['changed'] is True
-
-    def test_non_local_fails_cleanly_when_self_shadowed(self):
-        action = _action({'chart_ref': 'bitnami/nginx'}, local=False)
-        with self._shadow():
-            result = action.run(task_vars={})
-        assert result['failed'] is True
-        assert 'local connection' in result['msg']

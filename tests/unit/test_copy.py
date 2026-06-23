@@ -2,15 +2,27 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 import sys
 
 import pytest
+
+from ansible.errors import AnsibleActionFail, AnsibleError
 
 sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), '../../ansible/plugins/action_plugins')
 ))
 
 from tests.conftest import FAST_PLUGIN_MARKER, make_action, mock_builtin_run
+
+
+def _src_action(args, src_path, **kwargs):
+    """Build a copy action for a `src` task, stubbing _find_needle (which needs a
+    real role/search-path context unavailable to the unit harness) to resolve to
+    the given on-disk path."""
+    action = make_action('copy', args, **kwargs)
+    action._find_needle = lambda dirname, needle: src_path
+    return action
 
 
 class TestCopyFastPath:
@@ -95,11 +107,22 @@ class TestCopyFallback:
             action.run(task_vars={})
         mock.assert_called_once()
 
-    def test_delegates_for_src_based_copy(self, tmp_path):
+    def test_delegates_for_remote_src(self, tmp_path):
+        # remote_src means the source is on the target side; the fast path doesn't
+        # handle it (the source isn't read from the controller's files/ context).
         src = tmp_path / 'src.txt'
         src.write_text('x')
         dest = str(tmp_path / 'dst.txt')
-        action = make_action('copy', {'src': str(src), 'dest': dest})
+        action = make_action('copy', {'src': str(src), 'dest': dest, 'remote_src': True})
+        with mock_builtin_run('copy', {'changed': True}) as mock:
+            action.run(task_vars={})
+        mock.assert_called_once()
+
+    def test_delegates_for_directory_src(self, tmp_path):
+        src_dir = tmp_path / 'srcdir'
+        src_dir.mkdir()
+        dest = str(tmp_path / 'dstdir')
+        action = _src_action({'src': str(src_dir), 'dest': dest}, str(src_dir))
         with mock_builtin_run('copy', {'changed': True}) as mock:
             action.run(task_vars={})
         mock.assert_called_once()
@@ -124,3 +147,92 @@ class TestCopyFallback:
         with mock_builtin_run('copy', {'changed': True}):
             result = action.run(task_vars={})
         assert FAST_PLUGIN_MARKER not in result
+
+
+class TestCopySrcFastPath:
+    """A local `src` file copy now runs in-process instead of falling back."""
+
+    def test_src_file_copied_in_process(self, tmp_path):
+        src = tmp_path / 'src.txt'
+        src.write_text('source bytes')
+        dest = str(tmp_path / 'dst.txt')
+        action = _src_action({'src': str(src), 'dest': dest}, str(src))
+        result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is True
+        assert open(dest).read() == 'source bytes'
+        # fast path ran (no fallback)
+        assert result[FAST_PLUGIN_MARKER] is True
+        assert result['src'] == str(src)
+        assert result['checksum'] == hashlib.sha1(b'source bytes',
+                                                  usedforsecurity=False).hexdigest()
+
+    def test_src_copy_is_idempotent(self, tmp_path):
+        src = tmp_path / 'src.txt'
+        src.write_text('same bytes')
+        dest = tmp_path / 'dst.txt'
+        dest.write_text('same bytes')
+        action = _src_action({'src': str(src), 'dest': str(dest)}, str(src))
+        result = action.run(task_vars={})
+        assert result['changed'] is False
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_src_copy_into_directory_dest(self, tmp_path):
+        src = tmp_path / 'ca.crt'
+        src.write_text('CERT')
+        dest_dir = tmp_path / 'destdir'
+        dest_dir.mkdir()
+        action = _src_action({'src': str(src), 'dest': str(dest_dir)}, str(src))
+        result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        # copied into the directory by basename, like stock copy
+        assert result['dest'] == str(dest_dir / 'ca.crt')
+        assert (dest_dir / 'ca.crt').read_text() == 'CERT'
+
+    def test_src_copy_sets_mode(self, tmp_path):
+        src = tmp_path / 'src.txt'
+        src.write_text('data')
+        dest = str(tmp_path / 'dst.txt')
+        action = _src_action({'src': str(src), 'dest': dest, 'mode': '0600'}, str(src))
+        result = action.run(task_vars={})
+        assert not result.get('failed')
+        assert stat.S_IMODE(os.stat(dest).st_mode) == 0o600
+
+    def test_src_not_found_falls_back(self, tmp_path):
+        dest = str(tmp_path / 'dst.txt')
+        action = make_action('copy', {'src': 'nope.txt', 'dest': dest})
+
+        def _raise(dirname, needle):
+            raise AnsibleError('Could not find file nope.txt')
+        action._find_needle = _raise
+        with mock_builtin_run('copy', {'changed': True}) as mock:
+            action.run(task_vars={})
+        mock.assert_called_once()
+
+
+class TestCopyStrictReason:
+    """AFLP_STRICT names the precise copy-specific trigger, not the generic
+    'unsupported arguments'."""
+
+    def test_strict_reports_remote_src(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('AFLP_STRICT', '1')
+        dest = str(tmp_path / 'dst.txt')
+        action = make_action('copy', {'src': '/x', 'dest': dest, 'remote_src': True})
+        with pytest.raises(AnsibleActionFail, match='remote_src'):
+            action.run(task_vars={})
+
+    def test_strict_reports_directory_source(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('AFLP_STRICT', '1')
+        src_dir = tmp_path / 'srcdir'
+        src_dir.mkdir()
+        dest = str(tmp_path / 'dstdir')
+        action = _src_action({'src': str(src_dir), 'dest': dest}, str(src_dir))
+        with pytest.raises(AnsibleActionFail, match='directory source'):
+            action.run(task_vars={})
+
+    def test_strict_reports_backup_arg(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('AFLP_STRICT', '1')
+        dest = str(tmp_path / 'dst.txt')
+        action = make_action('copy', {'dest': dest, 'content': 'x', 'backup': True})
+        with pytest.raises(AnsibleActionFail, match='backup'):
+            action.run(task_vars={})

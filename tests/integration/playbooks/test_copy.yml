@@ -78,6 +78,64 @@
         that:
           - s4.stat.mode == '0600'
 
+    # --- src-based copy (local file -> file), the case that used to fall back ---
+    - name: Create a source file to copy from
+      copy:
+        content: "ca bundle contents\n"
+        dest: "{{ work_dir }}/source.crt"
+
+    - name: Copy over a local file by src (fast path, no fallback)
+      copy:
+        src: "{{ work_dir }}/source.crt"
+        dest: "{{ work_dir }}/copied.crt"
+      register: r_src
+
+    - name: Assert src copy ran on the fast path and changed
+      assert:
+        that:
+          - r_src.changed
+          - r_src['__produced_by_fast_plugin'] | default(false)
+
+    - name: Read back the copied file
+      slurp:
+        src: "{{ work_dir }}/copied.crt"
+      register: copied_back
+
+    - name: Assert copied content matches the source
+      assert:
+        that:
+          - (copied_back.content | b64decode) == "ca bundle contents\n"
+
+    - name: Copy same src again (idempotent, still fast)
+      copy:
+        src: "{{ work_dir }}/source.crt"
+        dest: "{{ work_dir }}/copied.crt"
+      register: r_src2
+
+    - name: Assert src copy is idempotent
+      assert:
+        that:
+          - not r_src2.changed
+          - r_src2['__produced_by_fast_plugin'] | default(false)
+
+    # --- src copy into a directory dest places it by basename ---
+    - name: Make a destination directory
+      file:
+        path: "{{ work_dir }}/destdir"
+        state: directory
+
+    - name: Copy a file into a directory dest
+      copy:
+        src: "{{ work_dir }}/source.crt"
+        dest: "{{ work_dir }}/destdir"
+      register: r_srcdir
+
+    - name: Assert it landed inside the directory by basename
+      assert:
+        that:
+          - r_srcdir.dest == work_dir ~ '/destdir/source.crt'
+          - r_srcdir['__produced_by_fast_plugin'] | default(false)
+
     - name: Cleanup
       file:
         path: "{{ work_dir }}"

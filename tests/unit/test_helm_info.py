@@ -15,10 +15,9 @@ from tests.conftest import (
     _load_plugin,
     make_action,
     mock_collection_run,
-    shadow_collection_import,
 )
 
-PLUGIN_DIR = COLLECTION_PLUGIN_DIRS['kubernetes.core']
+PLUGIN_DIR = COLLECTION_PLUGIN_DIRS['aflp.kubernetes_core']
 FQCN = 'kubernetes.core.plugins.action.helm_info'
 
 # A fake helm that returns a deployed-release status for `helm status` and a
@@ -150,27 +149,16 @@ class TestHelmInfoFallback:
         assert FAST_PLUGIN_MARKER not in result
 
 
-class TestHelmInfoFallbackRecursion:
-    """When this collection shadows kubernetes.core, the fallback import resolves
-    to this very plugin; delegating used to recurse until 'maximum recursion depth
-    exceeded'. become on a local connection must use the fast path; non-local
-    connections must fail with an actionable message."""
+class TestHelmInfoGenuineMissing:
+    """The overrides now live in aflp.kubernetes_core and delegate to the genuine
+    kubernetes.core collection for non-local / become tasks. When that collection
+    is absent, a non-local task fails with an actionable message rather than
+    running or recursing into itself."""
 
-    def _shadow(self):
-        return shadow_collection_import(
-            FQCN, _load_plugin('helm_info', plugin_dir=PLUGIN_DIR))
-
-    def test_become_uses_fast_path_when_self_shadowed(self, tmp_path):
-        action = _action({'release_name': 'test-release', 'release_namespace': 'test-ns',
-                          'binary_path': str(_fake_helm(tmp_path))}, become=True)
-        with self._shadow():
-            result = action.run(task_vars={})
-        assert not result.get('failed'), result
-        assert result['status']['name'] == 'test-release'
-
-    def test_non_local_fails_cleanly_when_self_shadowed(self):
+    def test_non_local_without_genuine_fails(self, monkeypatch):
+        mod = _load_plugin('helm_info', plugin_dir=PLUGIN_DIR)
+        monkeypatch.setattr(mod, '_load_standard_action', lambda: None)
         action = _action({'release_name': 'r'}, local=False)
-        with self._shadow():
-            result = action.run(task_vars={})
+        result = action.run(task_vars={})
         assert result['failed'] is True
-        assert 'local connection' in result['msg']
+        assert 'not installed' in result['msg']

@@ -15,13 +15,23 @@ action_plugins = ./ansible/plugins/action_plugins
 
 The plugins override the built-in modules by the same short name (`stat`, `copy`, `template`, etc.). No other changes to your playbooks or roles are needed — the fast path activates automatically when the connection is `local`, and falls back to standard behaviour otherwise.
 
-If you also use the `kubernetes.core` collection overrides, add the collections path:
+If you also use the `kubernetes.core` collection overrides, add the collections path (which includes both the fast `aflp.kubernetes_core` collection shipped here and the genuine upstream `kubernetes.core` it delegates to), and install the genuine collection:
 
 ```ini
 [defaults]
-action_plugins  = ./ansible/plugins/action_plugins
-collections_path = ./ansible/collections
+action_plugins   = ./ansible/plugins/action_plugins
+callback_plugins = ./ansible/plugins/callback_plugins
+collections_path = ./ansible/collections:~/.ansible/collections
 ```
+
+```bash
+# Genuine kubernetes.core is a real dependency — the fast overrides delegate to it
+# for non-local / become tasks. requirements.yml pins a compatible version.
+ansible-galaxy collection install -r requirements.yml
+pip install kubernetes jsonpatch
+```
+
+The `aflp_kubernetes_redirect` callback (auto-loaded from `callback_plugins`) rewrites `kubernetes.core.<name>` → `aflp.kubernetes_core.<name>` for the overridden actions, so your roles keep their `kubernetes.core.*` names and still get the fast path.
 
 > **Note:** `action_plugins` accepts a colon-separated list of directories, so you can append this project's path to an existing value rather than replacing it:
 > ```ini
@@ -128,19 +138,19 @@ suppresses strict mode rather than making every task fail.
 | `stat` | `os.stat()` in-process | non-local, `become` |
 | `file` | `os`/`shutil` filesystem ops in-process | non-local, `become`, check-mode, `access_time`/`modification_time` |
 | `tempfile` | `tempfile.mkstemp/mkdtemp` in-process | non-local, `become`, check-mode |
-| `copy` | atomic write via `shutil.move` | non-local, `src`-based copy, `become`, unsupported args |
+| `copy` | atomic write via `shutil.move` (inline `content` or a local-file `src`) | non-local, `remote_src`, directory `src`, `become`, `mode: preserve`, unsupported args |
 | `template` | Jinja2 rendering via `ansible.template.Templar` | non-local, `become`, unsupported args |
 | `lineinfile` | in-process regexp/line edit + atomic write | non-local, `become`, check-mode, file-attr args (`mode`/`owner`/…), `validate` |
 | `uri` | HTTP request via `ansible.module_utils.urls.open_url` | non-local, `become`, async, check-mode, `dest`/`src`, `form-multipart`, unsupported args |
 | `slurp` | `base64`-encode a file read in-process | non-local, `become` |
 | `fetch` | read source + atomic local write (no slurp/stat fork) | non-local, `become`, check-mode |
 | `get_url` | download via `open_url` + checksum-based atomic write | non-local, `become`, async, check-mode, dir `dest`, checksum-URL, file-attr args |
-| `command` | `subprocess.run` (no shell) | non-local, `become`, async, `environment` vars, check-mode |
-| `shell` | `subprocess.run` (no Ansible module overhead) | non-local, `become`, async, `environment` vars, check-mode |
+| `command` | `subprocess.run` (no shell); honors `chdir`/`environment` | non-local, `become`, async, check-mode |
+| `shell` | `subprocess.run` (no Ansible module overhead); honors `chdir`/`environment` | non-local, `become`, async, check-mode |
 | `hashivault_read` | `hvac.Client` in-process | non-local |
 | `find_next_helm_release_number` | `kubectl get secrets` via subprocess | non-local |
 
-The `kubernetes.core` collection overrides (`k8s`, `k8s_info`, `helm_repository`) follow the same pattern via `kubectl`/`helm`, delegating to the genuine collection when non-local.
+The `kubernetes.core` collection overrides (`k8s`, `k8s_info`, `helm_repository`, `helm_pull`, `helm_info`) ship as the separate `aflp.kubernetes_core` collection and follow the same pattern via `kubectl`/`helm`. A callback rewrites `kubernetes.core.*` onto them so roles are unchanged. On a non-local connection (or `become`, or an unsupported argument) they delegate to the genuine upstream `kubernetes.core` collection — a required dependency — so the task runs correctly via the real plugin (just not the fast path).
 
 Equivalence to stock ansible-core is enforced by **output-parity tests**: for each deterministic plugin the integration suite runs the same task fast and again with `AFLP_DISABLE=1` (stock), then asserts the produced file (checksum + mode) and the shared result keys match.
 

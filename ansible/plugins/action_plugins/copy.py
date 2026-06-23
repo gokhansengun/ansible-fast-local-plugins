@@ -4,6 +4,7 @@ import hashlib
 import os
 import sys
 
+from ansible.errors import AnsibleError
 from ansible.module_utils.common.text.converters import to_bytes, to_text
 from ansible.module_utils.parsing.convert_bool import boolean
 from ansible.plugins.action import ActionBase
@@ -17,7 +18,14 @@ from _action_utils import _is_local, atomic_write, _load_builtin_action, mark_fa
 
 display = Display()
 
-FAST_COPY_VERSION = '1.0'
+FAST_COPY_VERSION = '1.1'
+
+# Args whose presence forces the standard plugin (features the fast path doesn't
+# reimplement: ownership, SELinux, backups, validation, remote-side source, ...).
+_UNSUPPORTED_ARGS = (
+    'attributes', 'backup', 'group', 'owner', 'remote_src',
+    'selevel', 'serole', 'setype', 'seuser', 'unsafe_writes', 'validate',
+)
 
 
 class ActionModule(ActionBase):
@@ -43,24 +51,60 @@ class ActionModule(ActionBase):
             )
         )
 
-        # Only optimise the content: + local path — fall back for everything else:
-        # src, remote_src, directory copy, become, backup, validate
+        # The fast path handles a local connection writing either inline `content`
+        # or a single local-file `src` to `dest`. Everything else delegates. We
+        # collect plugin-specific reasons so AFLP_STRICT names the real trigger
+        # rather than the generic "unsupported arguments". (become / check_mode /
+        # async / non-local are detected by strict_guard itself, so they force a
+        # fallback here but are not added to extra_reasons.)
         has_content = 'content' in args
         has_src = 'src' in args
-        unsupported_args = (
-            'attributes', 'backup', 'group', 'owner', 'remote_src',
-            'selevel', 'serole', 'setype', 'seuser', 'unsafe_writes', 'validate',
-        )
-        requires_standard_plugin = (
-            self._play_context.become
-            or self._play_context.check_mode
-            or self._task.async_val
-            or any(args.get(key) for key in unsupported_args)
-        )
+        mode = args.get('mode')
 
-        if not _is_local(conn) or not has_content or has_src or requires_standard_plugin:
+        fallback = (
+            not _is_local(conn)
+            or self._play_context.become
+            or self._play_context.check_mode
+            or bool(self._task.async_val)
+        )
+        extra_reasons = []
+
+        unsupported = [k for k in _UNSUPPORTED_ARGS if args.get(k)]
+        if unsupported:
+            fallback = True
+            extra_reasons.append('unsupported arg(s): ' + ', '.join(sorted(unsupported)))
+        if has_content and has_src:
+            fallback = True
+            extra_reasons.append('both content and src set')
+        elif not has_content and not has_src:
+            fallback = True
+            extra_reasons.append('neither content nor src set')
+        if mode == 'preserve':
+            fallback = True
+            extra_reasons.append('mode=preserve')
+        if args.get('local_follow') is False:
+            fallback = True
+            extra_reasons.append('local_follow=false')
+
+        # Resolve a `src` on the controller (== target for a local connection).
+        # A directory source means a recursive copy the fast path doesn't do.
+        resolved_src = None
+        if has_src and not has_content and not fallback:
+            try:
+                resolved_src = self._find_needle('files', args['src'])
+            except AnsibleError as e:
+                fallback = True
+                extra_reasons.append('source not found (%s)' % to_text(e))
+            else:
+                if os.path.isdir(resolved_src):
+                    fallback = True
+                    extra_reasons.append('directory source')
+                    resolved_src = None
+
+        if fallback:
             display.debug('fast_copy: delegating to standard copy plugin')
-            strict_guard(conn, self._play_context, self._task)
+            strict_guard(conn, self._play_context, self._task,
+                         extra_reasons=extra_reasons or None)
             _Standard = _load_builtin_action('copy').ActionModule
             std = _Standard(
                 self._task, conn, self._play_context,
@@ -68,11 +112,9 @@ class ActionModule(ActionBase):
             )
             return std.run(task_vars=task_vars)
 
-        return mark_fast_result(self._run_local(args))
+        return mark_fast_result(self._run_local(args, resolved_src))
 
-    def _run_local(self, args):
-        display.debug('fast_copy: local + content path, using in-process write')
-
+    def _run_local(self, args, resolved_src):
         dest = args.get('dest')
         if not dest:
             return dict(failed=True, msg='dest is required')
@@ -82,16 +124,29 @@ class ActionModule(ActionBase):
 
         # Resolve dest. ansible has already templated task args, so any '{{ }}'
         # in dest is resolved; template() here only re-resolves residual markers.
-        # (convert_bare is deprecated in 2.20 and dest is never a bare variable.)
         dest = os.path.expanduser(os.path.expandvars(
             self._templar.template(dest)
         ))
 
-        # Render content (may contain Jinja2 from task args templating)
-        content = args.get('content', '')
-        if content is None:
-            content = ''
-        b_content = to_bytes(to_text(content), errors='surrogate_or_strict')
+        if resolved_src is not None:
+            display.debug('fast_copy: local + src path, using in-process copy')
+            try:
+                with open(resolved_src, 'rb') as f:
+                    b_content = f.read()
+            except OSError as e:
+                return dict(failed=True,
+                            msg='could not read source %s: %s' % (resolved_src, to_text(e)))
+            # Copying a file onto a directory dest places it inside, by basename
+            # (matches stock copy).
+            if dest.endswith(os.sep) or os.path.isdir(dest):
+                dest = os.path.join(dest, os.path.basename(resolved_src))
+        else:
+            display.debug('fast_copy: local + content path, using in-process write')
+            content = args.get('content', '')
+            if content is None:
+                content = ''
+            b_content = to_bytes(to_text(content), errors='surrogate_or_strict')
+
         new_checksum = hashlib.sha1(b_content, usedforsecurity=False).hexdigest()
 
         # Idempotency check — no subprocess
@@ -112,9 +167,12 @@ class ActionModule(ActionBase):
             if err:
                 return dict(failed=True, msg=err)
 
-        return dict(
+        result = dict(
             changed=changed,
             dest=dest,
             checksum=new_checksum,
             size=len(b_content),
         )
+        if resolved_src is not None:
+            result['src'] = resolved_src
+        return result
