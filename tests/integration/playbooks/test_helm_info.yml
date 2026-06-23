@@ -1,0 +1,119 @@
+---
+- name: Integration tests for fast helm_info plugin
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_helm_info_work
+    kubeconfig: /kubeconfig/config
+    release: aflp-info-demo
+    namespace: test-ns
+
+  tasks:
+    - name: Reset work directory
+      file:
+        path: "{{ work_dir }}"
+        state: "{{ item }}"
+      loop:
+        - absent
+        - directory
+
+    - name: Create a local chart to install
+      command: "helm create demo"
+      args:
+        chdir: "{{ work_dir }}"
+
+    # --- ensure a clean slate, then install a release into the kind cluster ---
+    - name: Uninstall any leftover release
+      command: "helm uninstall {{ release }} -n {{ namespace }} --kubeconfig {{ kubeconfig }}"
+      register: r_uninstall
+      failed_when: false
+      changed_when: false
+
+    - name: Install the demo release (no --wait; release storage is what we query)
+      command: >-
+        helm install {{ release }} {{ work_dir }}/demo
+        -n {{ namespace }} --kubeconfig {{ kubeconfig }}
+
+    # --- query release info (fast path via local connection) ---
+    - name: Get release info
+      kubernetes.core.helm_info:
+        release_name: "{{ release }}"
+        release_namespace: "{{ namespace }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: r_info
+
+    - name: Assert release info returned
+      assert:
+        that:
+          - not r_info.failed | default(false)
+          - not r_info.changed
+          - r_info.status is not none
+          - r_info.status.name == release
+          - r_info.status.info.status == 'deployed'
+          - r_info['__produced_by_fast_plugin'] | default(false)
+
+    # --- get_all_values attaches values ---
+    - name: Get release info with all values
+      kubernetes.core.helm_info:
+        release_name: "{{ release }}"
+        release_namespace: "{{ namespace }}"
+        kubeconfig: "{{ kubeconfig }}"
+        get_all_values: true
+      register: r_values
+
+    - name: Assert values were attached
+      assert:
+        that:
+          - not r_values.failed | default(false)
+          - r_values.status.values is defined
+
+    # --- a release not matching release_state is filtered out ---
+    - name: Query with a non-matching release_state
+      kubernetes.core.helm_info:
+        release_name: "{{ release }}"
+        release_namespace: "{{ namespace }}"
+        kubeconfig: "{{ kubeconfig }}"
+        release_state:
+          - failed
+      register: r_filtered
+
+    - name: Assert filtered query returns no status
+      assert:
+        that:
+          - not r_filtered.failed | default(false)
+          - r_filtered.status is none
+
+    # --- a missing release is not an error ---
+    - name: Query a nonexistent release
+      kubernetes.core.helm_info:
+        release_name: does-not-exist
+        release_namespace: "{{ namespace }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: r_absent
+
+    - name: Assert missing release reports no status without failing
+      assert:
+        that:
+          - not r_absent.failed | default(false)
+          - r_absent.status is none
+          - r_absent['__produced_by_fast_plugin'] | default(false)
+
+    # --- missing required arg ---
+    - name: Call without release_name (expect failure)
+      kubernetes.core.helm_info:
+        release_namespace: "{{ namespace }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: r_no_name
+      ignore_errors: true
+
+    - name: Assert missing release_name fails
+      assert:
+        that:
+          - r_no_name.failed
+          - "'release_name' in r_no_name.msg"
+          - "'__produced_by_fast_plugin' not in r_no_name"
+
+    # --- cleanup ---
+    - name: Uninstall the demo release
+      command: "helm uninstall {{ release }} -n {{ namespace }} --kubeconfig {{ kubeconfig }}"
+      changed_when: false

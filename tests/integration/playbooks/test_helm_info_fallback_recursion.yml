@@ -1,0 +1,62 @@
+---
+# Replicates: "Task failed: maximum recursion depth exceeded".
+#
+# A helm_info task that trips the fallback gate (become: true, or a non-local
+# connection) makes the plugin import
+# ansible_collections.kubernetes.core.plugins.action.helm_info — which is this
+# very plugin, because the collection is installed AS kubernetes.core and the
+# genuine collection is deliberately absent (see docker/Dockerfile). The
+# plugin then delegates to itself until Python's recursion limit, unless the
+# self-shadow guard catches it and runs the local fast path instead.
+- name: helm_info fallback gate must not recurse into itself
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_helm_info_recursion_work
+    kubeconfig: /kubeconfig/config
+    release: aflp-info-recursion
+    namespace: test-ns
+
+  tasks:
+    - name: Reset work directory
+      file:
+        path: "{{ work_dir }}"
+        state: "{{ item }}"
+      loop:
+        - absent
+        - directory
+
+    - name: Create a local chart to install
+      command: "helm create demo"
+      args:
+        chdir: "{{ work_dir }}"
+
+    - name: Uninstall any leftover release
+      command: "helm uninstall {{ release }} -n {{ namespace }} --kubeconfig {{ kubeconfig }}"
+      failed_when: false
+      changed_when: false
+
+    - name: Install the demo release
+      command: >-
+        helm install {{ release }} {{ work_dir }}/demo
+        -n {{ namespace }} --kubeconfig {{ kubeconfig }}
+
+    # become: true trips the fallback gate; the self-shadow guard must run the
+    # local fast path rather than delegate to itself.
+    - name: Get release info under become (must not recurse)
+      kubernetes.core.helm_info:
+        release_name: "{{ release }}"
+        release_namespace: "{{ namespace }}"
+        kubeconfig: "{{ kubeconfig }}"
+      become: true
+      register: r_info
+
+    - name: Assert release info returned via the fast path
+      assert:
+        that:
+          - not r_info.failed | default(false)
+          - r_info.status.name == release
+
+    - name: Uninstall the demo release
+      command: "helm uninstall {{ release }} -n {{ namespace }} --kubeconfig {{ kubeconfig }}"
+      changed_when: false

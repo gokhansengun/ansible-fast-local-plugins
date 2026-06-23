@@ -1,0 +1,129 @@
+---
+- name: Integration tests for fast helm_pull plugin
+  hosts: local
+  gather_facts: false
+  vars:
+    work_dir: /tmp/aflp_helm_pull_work
+    http_port: 8879
+    repo_url: "http://127.0.0.1:8879"
+
+  tasks:
+    - name: Reset work directory
+      file:
+        path: "{{ work_dir }}"
+        state: "{{ item }}"
+      loop:
+        - absent
+        - directory
+
+    # helm pull writes a temp file into --destination, so the dir must exist.
+    - name: Create the download destination directories
+      file:
+        path: "{{ work_dir }}/{{ item }}"
+        state: directory
+      loop:
+        - dl
+        - dl2
+
+    # --- build a local chart repo (offline) and serve it over HTTP ---
+    - name: Create a local chart
+      command: "helm create demo"
+      args:
+        chdir: "{{ work_dir }}"
+
+    - name: Package the chart into a repo directory
+      command: "helm package {{ work_dir }}/demo --destination {{ work_dir }}/repo"
+
+    - name: Build a repo index
+      command: "helm repo index {{ work_dir }}/repo"
+
+    # helm has no file:// getter, so serve the repo over HTTP for the duration.
+    - name: Serve the repo over HTTP (fire-and-forget)
+      command: "python3 -m http.server {{ http_port }} --bind 127.0.0.1 --directory {{ work_dir }}/repo"
+      async: 120
+      poll: 0
+      register: http_server
+
+    - name: Wait for the HTTP repo to be reachable
+      wait_for:
+        host: 127.0.0.1
+        port: "{{ http_port }}"
+        timeout: 15
+
+    # --- pull the chart (fast path via local connection) ---
+    - name: Pull the demo chart by repo_url
+      kubernetes.core.helm_pull:
+        chart_ref: demo
+        repo_url: "{{ repo_url }}"
+        chart_destination: "{{ work_dir }}/dl"
+      register: r_pull
+
+    - name: Assert chart was pulled
+      assert:
+        that:
+          - r_pull.changed
+          - r_pull.rc == 0
+          - "'pull' in r_pull.command"
+          - r_pull['__produced_by_fast_plugin'] | default(false)
+
+    - name: Find the pulled tarball
+      find:
+        paths: "{{ work_dir }}/dl"
+        patterns: "demo-*.tgz"
+      register: r_found
+
+    - name: Assert the tarball exists
+      assert:
+        that:
+          - r_found.files | length == 1
+
+    # --- pull with untar ---
+    - name: Pull and untar the demo chart
+      kubernetes.core.helm_pull:
+        chart_ref: demo
+        repo_url: "{{ repo_url }}"
+        untar: true
+        untar_dir: "{{ work_dir }}/untarred"
+        chart_destination: "{{ work_dir }}/dl2"
+      register: r_untar
+
+    - name: Stat the extracted chart definition
+      stat:
+        path: "{{ work_dir }}/untarred/demo/Chart.yaml"
+      register: r_chart_yaml
+
+    - name: Assert the chart was extracted
+      assert:
+        that:
+          - r_untar.changed
+          - r_chart_yaml.stat.exists
+
+    # --- missing required arg ---
+    - name: Call without chart_ref (expect failure)
+      kubernetes.core.helm_pull:
+        chart_version: 1.0.0
+      register: r_missing
+      ignore_errors: true
+
+    - name: Assert missing chart_ref fails
+      assert:
+        that:
+          - r_missing.failed
+          - "'chart_ref' in r_missing.msg"
+          # Fast-path failures are not marked.
+          - "'__produced_by_fast_plugin' not in r_missing"
+
+    # --- invalid binary ---
+    - name: Call with nonexistent helm binary (expect failure)
+      kubernetes.core.helm_pull:
+        chart_ref: demo
+        repo_url: "{{ repo_url }}"
+        binary_path: /nonexistent/helm
+      register: r_bad_bin
+      ignore_errors: true
+
+    - name: Assert bad binary path fails
+      assert:
+        that:
+          - r_bad_bin.failed
+          - "'failed to run helm' in r_bad_bin.msg"

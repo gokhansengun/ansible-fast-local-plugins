@@ -196,6 +196,34 @@ def test_helm_repository():
 
 
 @pytest.mark.integration
+def test_helm_pull():
+    _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_helm_pull.yml')))
+
+
+@pytest.mark.integration
+def test_helm_info():
+    _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_helm_info.yml')))
+
+
+@pytest.mark.integration
+def test_helm_info_fallback_no_recursion():
+    """Replicates 'Task failed: maximum recursion depth exceeded'.
+
+    The fallback gate in the overriding kubernetes.core.helm_info action plugin
+    imports its own module (the collection shadows kubernetes.core), so any
+    become/non-local task delegates to itself until the recursion limit.
+    """
+    result = _run(os.path.join(PLAYBOOK_DIR, 'test_helm_info_fallback_recursion.yml'))
+    output = result.stdout + result.stderr
+    assert 'maximum recursion depth exceeded' not in output, (
+        f'helm_info fallback delegated to itself\n'
+        f'--- stdout ---\n{result.stdout}\n'
+        f'--- stderr ---\n{result.stderr}'
+    )
+    _assert_playbook(result)
+
+
+@pytest.mark.integration
 def test_k8s_info():
     _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_k8s_info.yml')))
 
