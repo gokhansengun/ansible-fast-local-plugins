@@ -519,6 +519,34 @@ class TestK8sFastPathPresent:
 # ------------------------------------------------------------------ #
 # ActionModule – state: latest                                         #
 # ------------------------------------------------------------------ #
+class TestK8sUnsupportedArgs:
+    def test_unsupported_arg_delegates(self):
+        """append_hash changes the created object's name; the fast path must
+        delegate to genuine rather than silently ignore it."""
+        action = _action({'state': 'present', 'definition': _obj('c', 'ConfigMap', 'ns'),
+                          'append_hash': True})
+        with mock_collection_run(FQCN, {'changed': True, 'result': {}}) as mock:
+            action.run(task_vars={})
+        mock.assert_called_once()
+
+    def test_validate_certs_true_delegates(self):
+        action = _action({'state': 'absent', 'kind': 'ConfigMap', 'name': 'c',
+                          'validate_certs': True})
+        with mock_collection_run(FQCN, {'changed': False, 'result': {}}) as mock:
+            action.run(task_vars={})
+        mock.assert_called_once()
+
+    def test_validate_certs_false_stays_fast_with_flag(self):
+        action = _action({'state': 'absent', 'kind': 'ConfigMap', 'name': 'c',
+                          'namespace': 'ns', 'validate_certs': False})
+        with patch('subprocess.run', return_value=_proc(stdout='configmap/c\n')) as mock_run:
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result[FAST_PLUGIN_MARKER] is True
+        cmd = mock_run.call_args[0][0]
+        assert '--insecure-skip-tls-verify' in cmd
+
+
 class TestK8sFastPathLatest:
     def test_noop_when_no_diff(self):
         """state=latest is idempotent like state=present."""
@@ -546,6 +574,17 @@ class TestK8sFastPathAbsent:
             result = action.run(task_vars={})
         assert not result.get('failed'), result
         assert result['changed'] is True
+
+    def test_api_alias_selects_api_version(self):
+        """`api`/`version` are genuine-argspec aliases for api_version; without
+        normalization the delete silently targeted api_version=v1."""
+        action = _action({'state': 'absent', 'kind': 'Deployment', 'name': 'web',
+                          'namespace': 'default', 'api': 'apps/v1'})
+        with patch('subprocess.run', return_value=_proc(stdout='deployment.apps/web\n')) as mock_run:
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        cmd = ' '.join(mock_run.call_args[0][0])
+        assert 'deployment.apps' in cmd
 
     def test_noop_when_not_found(self):
         action = _action({'state': 'absent', 'kind': 'ConfigMap',

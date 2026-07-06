@@ -16,11 +16,29 @@ from ansible.utils.display import Display
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
-from _action_utils import _is_local, mark_fast_result, strict_guard  # noqa: E402
+from _action_utils import _is_local, mark_fast_result, normalize_arg_aliases, strict_guard  # noqa: E402
 
 display = Display()
 
 FAST_STAT_VERSION = '1.0'
+
+# Stock stat argspec aliases, folded onto canonical names by normalize_arg_aliases.
+# Without this a task saying `checksum: sha256` silently got a sha1 checksum,
+# since stat has no unsupported-arg gate to fall back through.
+_ARG_ALIASES = {
+    'dest': 'path', 'name': 'path',
+    'checksum': 'checksum_algorithm', 'checksum_algo': 'checksum_algorithm',
+    'mime': 'get_mime', 'mime_type': 'get_mime', 'mime-type': 'get_mime',
+    'attr': 'get_attributes', 'attributes': 'get_attributes',
+}
+
+# Arguments the in-process fast path honours (canonical names; aliases are
+# folded first). Anything else — get_attributes (needs lsattr; the fast result
+# hardcodes attributes=[]), or an unknown/future arg — delegates to the stock
+# module rather than being silently ignored.
+_SUPPORTED_ARGS = frozenset({
+    'path', 'follow', 'get_checksum', 'checksum_algorithm', 'get_mime',
+})
 
 _CHECKSUM_MAP = {
     'sha1': hashlib.sha1,
@@ -54,7 +72,7 @@ class ActionModule(ActionBase):
         del tmp
 
         conn = self._connection
-        args = self._task.args
+        args = normalize_arg_aliases(self._task.args, _ARG_ALIASES)
 
         display.debug(
             'fast_stat v%s: transport=%r  _load_name=%r  class=%s.%s' % (
@@ -66,9 +84,16 @@ class ActionModule(ActionBase):
             )
         )
 
-        if not _is_local(conn) or self._play_context.become:
-            display.debug('fast_stat: non-local connection, delegating to module')
-            strict_guard(conn, self._play_context, self._task)
+        unsupported = set(args) - _SUPPORTED_ARGS
+        if not _is_local(conn) or self._play_context.become or unsupported:
+            extra_reasons = []
+            if unsupported:
+                display.debug('fast_stat: unsupported args %r, delegating to module'
+                              % sorted(unsupported))
+                extra_reasons.append('unsupported arguments: %s' % ', '.join(sorted(unsupported)))
+            else:
+                display.debug('fast_stat: non-local connection, delegating to module')
+            strict_guard(conn, self._play_context, self._task, extra_reasons=extra_reasons)
             return self._execute_module(task_vars=task_vars, wrap_async=self._task.async_val)
 
         return mark_fast_result(self._run_local(args, result))

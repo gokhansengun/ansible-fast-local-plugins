@@ -11,6 +11,28 @@ display = Display()
 
 FAST_HELM_PULL_VERSION = '1.0'
 
+# Genuine kubernetes.core helm_pull argspec aliases, folded onto canonical names
+# at the top of run(). Keep in sync with the pinned kubernetes.core version.
+_ARG_ALIASES = {
+    'url': 'repo_url', 'chart_repo_url': 'repo_url',
+    'username': 'repo_username', 'chart_repo_username': 'repo_username',
+    'password': 'repo_password', 'chart_repo_password': 'repo_password',
+    'insecure_skip_tls_verify': 'skip_tls_certs_check',
+}
+
+
+# Arguments the in-process fast path honours (canonical names; aliases are
+# folded first) — the genuine module's full argspec. Anything else (a typo or
+# a future kubernetes.core parameter) delegates to the genuine module so its
+# behaviour is preserved rather than silently ignored.
+_SUPPORTED_ARGS = frozenset({
+    'chart_ref', 'chart_version', 'verify_chart', 'verify_chart_keyring',
+    'provenance', 'repo_url', 'repo_username', 'repo_password',
+    'pass_credentials', 'skip_tls_certs_check', 'chart_devel', 'untar_chart',
+    'destination', 'chart_ca_cert', 'chart_ssl_cert_file',
+    'chart_ssl_key_file', 'binary_path',
+})
+
 
 def _is_local(connection):
     # AFLP_DISABLE kill-switch: force fallback to the genuine kubernetes.core plugin.
@@ -26,7 +48,7 @@ def _is_local(connection):
     return False
 
 
-def _strict_guard(connection, play_context):
+def _strict_guard(connection, play_context, extra_reasons=None):
     # AFLP_STRICT: raise rather than fall back to the genuine collection, so an
     # unintended k8s task in a local-only run is caught. AFLP_DISABLE (the global
     # kill-switch) is an intentional fallback and suppresses this.
@@ -38,6 +60,10 @@ def _strict_guard(connection, play_context):
             reasons.append('non-local connection')
         if getattr(play_context, 'become', False):
             reasons.append('become')
+        if extra_reasons:
+            if isinstance(extra_reasons, str):
+                extra_reasons = [extra_reasons]
+            reasons.extend(extra_reasons)
         reason = ', '.join(reasons) or 'an unsupported argument'
         from ansible.errors import AnsibleActionFail
         raise AnsibleActionFail(
@@ -64,7 +90,10 @@ class ActionModule(ActionBase):
         del tmp
 
         conn = self._connection
-        args = self._task.args
+        args = dict(self._task.args)
+        for alias, canonical in _ARG_ALIASES.items():
+            if alias in args and canonical not in args:
+                args[canonical] = args.pop(alias)
 
         display.debug(
             'fast_helm_pull v%s: transport=%r  _load_name=%r  class=%s.%s' % (
@@ -76,8 +105,13 @@ class ActionModule(ActionBase):
             )
         )
 
-        if not _is_local(conn) or self._play_context.become:
-            _strict_guard(conn, self._play_context)
+        unsupported = set(args) - _SUPPORTED_ARGS
+        if not _is_local(conn) or self._play_context.become or unsupported:
+            extra_reasons = None
+            if unsupported:
+                extra_reasons = ['unsupported arguments: %s' % ', '.join(sorted(unsupported))]
+                display.debug('fast_helm_pull: unsupported args %r, delegating' % sorted(unsupported))
+            _strict_guard(conn, self._play_context, extra_reasons=extra_reasons)
             # The genuine kubernetes.core.helm_pull is module-only (no action
             # plugin), so unlike the other overrides we delegate via the module
             # rather than instantiating a standard action class. module_name
@@ -95,11 +129,16 @@ class ActionModule(ActionBase):
 
         chart_ref = args.get('chart_ref')
         binary_path = args.get('binary_path') or 'helm'
+        destination = args.get('destination')
 
         if not chart_ref:
             return dict(failed=True, msg='chart_ref is required')
+        if not destination:
+            # Required by the genuine module's argspec; enforced here so the
+            # fast path never accepts a task the fallback would reject.
+            return dict(failed=True, msg='destination is required')
 
-        cmd = [binary_path, 'pull', chart_ref]
+        cmd = [binary_path, 'pull', chart_ref, '--destination', destination]
 
         if args.get('chart_version'):
             cmd += ['--version', args['chart_version']]
@@ -121,14 +160,14 @@ class ActionModule(ActionBase):
             cmd.append('--devel')
         if args.get('skip_tls_certs_check') or args.get('insecure_skip_tls_verify'):
             cmd.append('--insecure-skip-tls-verify')
-        if args.get('untar'):
+        if args.get('untar_chart'):
             cmd.append('--untar')
-        if args.get('untar_dir'):
-            cmd += ['--untardir', args['untar_dir']]
-        if args.get('chart_destination') or args.get('destination'):
-            cmd += ['--destination', args.get('chart_destination') or args['destination']]
-        if args.get('ca_cert'):
-            cmd += ['--ca-file', args['ca_cert']]
+        if args.get('chart_ca_cert'):
+            cmd += ['--ca-file', args['chart_ca_cert']]
+        if args.get('chart_ssl_cert_file'):
+            cmd += ['--cert-file', args['chart_ssl_cert_file']]
+        if args.get('chart_ssl_key_file'):
+            cmd += ['--key-file', args['chart_ssl_key_file']]
 
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True)

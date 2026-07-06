@@ -201,6 +201,21 @@ class TestUriFastPath:
             result = action.run(task_vars={})
         assert result['x_request_id'] == '42'
 
+    def test_user_password_aliases_stay_fast(self):
+        """user/password are stock-argspec aliases; they must not trigger fallback."""
+        action, mod = _make({
+            'url': 'http://test/', 'user': 'elastic', 'password': 's3cret',
+            'force_basic_auth': True,
+        })
+        resp = _FakeResp(headers={'Content-Type': 'text/plain'})
+        m = MagicMock(return_value=resp)
+        with patch.object(mod, 'open_url', m):
+            result = action.run(task_vars={})
+        assert result[FAST_PLUGIN_MARKER] is True
+        kwargs = m.call_args.kwargs
+        assert kwargs['url_username'] == 'elastic'
+        assert kwargs['url_password'] == 's3cret'
+
     def test_fast_path_sets_marker(self):
         action, mod = _make({'url': 'http://test/'})
         resp = _FakeResp(headers={'Content-Type': 'text/plain'})
@@ -241,6 +256,14 @@ class TestUriFallback:
     def test_delegates_for_unsupported_args(self):
         """dest (file download) is unsupported in-process; must reach the module."""
         action = make_action('uri', {'url': 'http://test/', 'dest': '/tmp/out'})
+        with patch.object(action, '_execute_module', return_value={'status': 200}) as mock_exec:
+            action.run(task_vars={})
+        mock_exec.assert_called_once()
+
+    def test_delegates_when_alias_and_canonical_conflict(self):
+        """Both user and url_username set: let the module's precedence rules decide."""
+        action = make_action('uri', {'url': 'http://test/', 'user': 'a',
+                                     'url_username': 'b'})
         with patch.object(action, '_execute_module', return_value={'status': 200}) as mock_exec:
             action.run(task_vars={})
         mock_exec.assert_called_once()

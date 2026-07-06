@@ -29,6 +29,14 @@ if not _is_local(conn) or self._play_context.become:
 
 `strict_guard(connection, play_context, task=None)` in `_action_utils.py` raises `AnsibleActionFail` (with a best-effort reason — non-local / become / check_mode / async / "unsupported arguments") when `AFLP_STRICT` is truthy, so an *unintended* fallback fails the task instead of silently running slow. It is **called at the top of every plugin's fallback branch**, right before the delegate (the `_execute_module(...)` or `_Standard = _load_builtin_action(...)` line) — all 14 standalone plugins import and call it. It is a no-op when `AFLP_STRICT` is unset (so it never affects normal runs or existing tests), and `_fast_disabled()` suppresses it (AFLP_DISABLE is an intentional fallback; the two are not meant to be combined). The five `kubernetes.core` overrides define a self-contained `_strict_guard()` (alongside their own `_is_local()`) and call it at their delegation points — keep these in sync with the shared one. When adding a new plugin, add a `strict_guard(conn, self._play_context, self._task)` call to each of its fallback branches.
 
+### Argspec aliases (`normalize_arg_aliases`)
+
+Stock modules resolve argspec aliases (`uri`'s `user` → `url_username`, `stat`'s `checksum` → `checksum_algorithm`, `helm_info`'s `namespace` → `release_namespace`, ...) inside `AnsibleModule`, which action plugins never run — so a fast plugin sees the raw task keys. Unhandled, an aliased task either looks "unsupported" to a whitelist gate (needless fallback — how this was found: 76 `uri` fallbacks from `user:`/`password:`) or, worse, has the argument **silently ignored** by plugins without a whitelist (`stat`, the k8s overrides). Every plugin whose stock counterpart has aliases therefore folds them at the top of `run()` via `normalize_arg_aliases(self._task.args, _ARG_ALIASES)` from `_action_utils.py` (the five `kubernetes.core` overrides inline the same 4-line fold, self-contained as usual; their maps mirror the **pinned** genuine collection's argspecs — re-check on a version bump). If a task sets both an alias and its canonical name, the alias is deliberately left in place so a whitelist gate falls back and the stock module applies its own precedence rules. When adding a plugin, check the stock module's argspec (including `argument_spec.update`/dict-style specs in module_utils) for `aliases=` and add a `_ARG_ALIASES` map.
+
+### Unsupported-arg gates (`_SUPPORTED_ARGS`)
+
+A fast path that implements only a subset of its stock counterpart's arguments must carry a `_SUPPORTED_ARGS` frozenset (canonical names — aliases are folded first) and delegate whenever `set(args) - _SUPPORTED_ARGS` is non-empty, passing the unsupported names to the strict guard via `extra_reasons`. Without the gate an unimplemented argument is *silently ignored* — the task runs fast, reports ok, carries the marker, and did something different from stock (this is how `stat`'s `checksum:` produced sha1 and `helm_info`'s `namespace:` queried the wrong namespace before the alias work). `uri`, `get_url`, `lineinfile`, `stat`, and all five `kubernetes.core` overrides now gate this way; keep each set exactly in sync with what its `_run_local` reads. Values can gate conditionally where only some are reproducible in-process — `uri` delegates `body_format=form-multipart`; `k8s`/`k8s_info` honour `validate_certs=false` (kubectl `--insecure-skip-tls-verify`) but delegate an explicit `true`, since enforcing verification over the kubeconfig is something only the genuine client can do.
+
 ### Atomic writes
 
 `atomic_write()` in `_action_utils.py` writes to a same-directory temp file then `shutil.move()`s it. Used by `copy.py`, `template.py`, `lineinfile.py`, and `get_url.py`. Mode handling matches stock ansible's `atomic_move`: an explicit `mode` is applied; otherwise an *existing* file keeps its perms and a *new* file gets the umask default (`0666 & ~umask`) — **not** mkstemp's restrictive `0600`. This umask default lives only here, so `copy`/`template`/`lineinfile`/`get_url` all inherit it (don't re-implement it per plugin).
@@ -120,9 +128,9 @@ The third slot exists because `ansible-modules-hashivault` versions are tied to 
 
 | Service | Image | Purpose |
 |---|---|---|
-| `dind` | `docker:24-dind` | Docker daemon for kind to create containers in |
+| `dind` | `docker:29-dind` | Docker daemon for kind to create containers in |
 | `kind-setup` | custom Alpine | Creates a 1-node kind cluster inside DinD; exposes API at `dind:6443` |
-| `vault` | `hashicorp/vault:1.17` | Dev-mode Vault; root token `root` |
+| `vault` | `hashicorp/vault:1.21.4` | Dev-mode Vault; root token `root` |
 | `vault-seed` | same vault image | One-shot: seeds KV v1 at `secret/test-kv1`, KV v2 at `secretv2/test-kv2` |
 | `ssh-target` | custom Debian | openssh-server; generates ED25519 key pair into `ssh-keys` volume |
 | `controller` | custom Python | Runs pytest; mounts repo read-only, kubeconfig and ssh-keys volumes |

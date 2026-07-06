@@ -16,7 +16,7 @@ from ansible.utils.display import Display
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
-from _action_utils import _is_local, mark_fast_result, strict_guard  # noqa: E402
+from _action_utils import _is_local, mark_fast_result, normalize_arg_aliases, strict_guard  # noqa: E402
 
 display = Display()
 
@@ -33,6 +33,9 @@ _SUPPORTED_ARGS = frozenset({
     'status_code', 'timeout', 'validate_certs', 'url_username', 'url_password',
     'force_basic_auth', 'follow_redirects', 'http_agent', 'decompress',
 })
+
+# Stock uri argspec aliases, folded onto canonical names by normalize_arg_aliases.
+_ARG_ALIASES = {'user': 'url_username', 'password': 'url_password'}
 
 
 def _str2bool(value, default=False):
@@ -55,7 +58,7 @@ class ActionModule(ActionBase):
         del tmp
 
         conn = self._connection
-        args = self._task.args
+        args = normalize_arg_aliases(self._task.args, _ARG_ALIASES)
 
         display.debug(
             'fast_uri v%s: transport=%r  _load_name=%r  class=%s.%s' % (
@@ -75,11 +78,15 @@ class ActionModule(ActionBase):
                 or self._task.async_val or self._play_context.check_mode
                 or args.get('body_format') == 'form-multipart'
                 or unsupported):
+            extra_reasons = []
             if unsupported:
                 display.debug('fast_uri: unsupported args %r, delegating to module' % sorted(unsupported))
+                extra_reasons.append('unsupported arguments: %s' % ', '.join(sorted(unsupported)))
             else:
                 display.debug('fast_uri: delegating to standard uri module')
-            strict_guard(conn, self._play_context, self._task)
+            if args.get('body_format') == 'form-multipart':
+                extra_reasons.append('form-multipart body')
+            strict_guard(conn, self._play_context, self._task, extra_reasons=extra_reasons)
             return self._execute_module(task_vars=task_vars, wrap_async=self._task.async_val)
 
         return mark_fast_result(self._run_local(args, result))

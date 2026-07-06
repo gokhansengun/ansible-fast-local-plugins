@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from unittest.mock import patch
@@ -68,6 +69,23 @@ class TestStatFastPath:
         assert result['stat']['islnk'] is False
         assert result['stat']['isreg'] is True
 
+    def test_checksum_alias_selects_algorithm(self, tmp_path):
+        """`checksum: sha256` is a stock alias for checksum_algorithm; it must not
+        silently fall back to sha1."""
+        f = tmp_path / 'data.txt'
+        f.write_bytes(b'content')
+        action = make_action('stat', {'path': str(f), 'checksum': 'sha256'})
+        result = action.run(task_vars={})
+        assert result['stat']['checksum'] == hashlib.sha256(b'content').hexdigest()
+
+    def test_path_aliases_accepted(self, tmp_path):
+        f = tmp_path / 'data.txt'
+        f.write_text('x')
+        for alias in ('dest', 'name'):
+            action = make_action('stat', {alias: str(f)})
+            result = action.run(task_vars={})
+            assert result['stat']['exists'] is True, alias
+
     def test_missing_path_arg_returns_failed(self):
         action = make_action('stat', {})
         result = action.run(task_vars={})
@@ -116,6 +134,14 @@ class TestStatFastPath:
 
 
 class TestStatFallback:
+    def test_delegates_for_unsupported_args(self, tmp_path):
+        """get_attributes needs lsattr; the fast path must delegate, not silently
+        return its hardcoded empty attributes."""
+        action = make_action('stat', {'path': str(tmp_path), 'get_attributes': True})
+        with patch.object(action, '_execute_module', return_value={'stat': {}}) as mock_exec:
+            action.run(task_vars={})
+        mock_exec.assert_called_once()
+
     def test_delegates_for_non_local_connection(self, tmp_path):
         f = tmp_path / 'x.txt'
         f.write_text('x')

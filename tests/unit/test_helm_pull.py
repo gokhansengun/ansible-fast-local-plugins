@@ -36,7 +36,7 @@ def _fake_helm(tmp_path, body='exit 0\n', record=None):
 
 class TestHelmPullFastPath:
     def test_pulls_chart_successfully(self, tmp_path):
-        action = _action({'chart_ref': 'bitnami/nginx',
+        action = _action({'chart_ref': 'bitnami/nginx', 'destination': str(tmp_path),
                           'binary_path': str(_fake_helm(tmp_path))})
         result = action.run(task_vars={})
         assert not result.get('failed')
@@ -44,14 +44,45 @@ class TestHelmPullFastPath:
         assert result['rc'] == 0
         assert 'pull' in result['command']
 
+    def test_repo_url_alias(self, tmp_path):
+        """url is a genuine-argspec alias for repo_url; without normalization
+        the pull silently ran without --repo."""
+        rec = tmp_path / 'args.txt'
+        action = _action({'chart_ref': 'nginx', 'url': 'https://example.com/charts',
+                          'destination': str(tmp_path),
+                          'binary_path': str(_fake_helm(tmp_path, record=rec))})
+        result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        out = rec.read_text()
+        assert '--repo' in out
+        assert 'https://example.com/charts' in out
+
+    def test_unsupported_arg_delegates(self):
+        """untar_dir does not exist in the genuine argspec; the fast path must
+        delegate so the genuine module rejects it, not silently ignore it."""
+        action = _action({'chart_ref': 'nginx', 'destination': '/tmp',
+                          'untar_dir': '/tmp/charts'})
+        with patch.object(action, '_execute_module', return_value={'failed': True}) as m:
+            action.run(task_vars={})
+        m.assert_called_once()
+
     def test_missing_chart_ref_returns_failed(self):
         action = _action({'chart_version': '1.0.0'})
         result = action.run(task_vars={})
         assert result['failed'] is True
         assert 'chart_ref' in result['msg']
 
+    def test_missing_destination_returns_failed(self, tmp_path):
+        """destination is required by the genuine argspec; the fast path must not
+        accept a task the fallback would reject."""
+        action = _action({'chart_ref': 'nginx',
+                          'binary_path': str(_fake_helm(tmp_path))})
+        result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert 'destination' in result['msg']
+
     def test_helm_nonzero_exit_returns_failed(self, tmp_path):
-        action = _action({'chart_ref': 'bitnami/nginx',
+        action = _action({'chart_ref': 'bitnami/nginx', 'destination': str(tmp_path),
                           'binary_path': str(_fake_helm(tmp_path, 'echo "boom" >&2\nexit 1\n'))})
         result = action.run(task_vars={})
         assert result['failed'] is True
@@ -59,7 +90,8 @@ class TestHelmPullFastPath:
         assert 'boom' in result['stderr']
 
     def test_invalid_binary_returns_failed(self):
-        action = _action({'chart_ref': 'bitnami/nginx', 'binary_path': '/nonexistent/helm'})
+        action = _action({'chart_ref': 'bitnami/nginx', 'destination': '/tmp',
+                          'binary_path': '/nonexistent/helm'})
         result = action.run(task_vars={})
         assert result['failed'] is True
         assert 'failed to run helm' in result['msg']
@@ -68,6 +100,7 @@ class TestHelmPullFastPath:
         rec = tmp_path / 'args.txt'
         action = _action({'chart_ref': 'nginx', 'chart_version': '1.2.3',
                           'repo_url': 'https://example.com/charts',
+                          'destination': str(tmp_path),
                           'binary_path': str(_fake_helm(tmp_path, record=rec))})
         action.run(task_vars={})
         out = rec.read_text()
@@ -77,30 +110,36 @@ class TestHelmPullFastPath:
     def test_passes_credentials(self, tmp_path):
         rec = tmp_path / 'args.txt'
         action = _action({'chart_ref': 'nginx', 'repo_username': 'u', 'repo_password': 'p',
-                          'pass_credentials': True,
+                          'pass_credentials': True, 'destination': str(tmp_path),
                           'binary_path': str(_fake_helm(tmp_path, record=rec))})
         action.run(task_vars={})
         out = rec.read_text()
         assert '--username' in out and '--password' in out and '--pass-credentials' in out
 
-    def test_passes_untar_and_destination(self, tmp_path):
+    def test_passes_untar_chart_destination_and_ca_cert(self, tmp_path):
+        """Genuine param names (untar_chart, destination, chart_ca_cert) — the
+        override previously read invented names (untar, chart_destination,
+        ca_cert) and silently ignored these."""
         rec = tmp_path / 'args.txt'
-        action = _action({'chart_ref': 'nginx', 'untar': True, 'untar_dir': '/tmp/charts',
-                          'chart_destination': '/tmp/dl',
+        action = _action({'chart_ref': 'nginx', 'untar_chart': True,
+                          'destination': '/tmp/dl', 'chart_ca_cert': '/tmp/ca.pem',
                           'binary_path': str(_fake_helm(tmp_path, record=rec))})
         action.run(task_vars={})
         out = rec.read_text()
-        assert '--untar' in out and '--untardir' in out and '--destination' in out
+        assert '--untar' in out
+        assert '--destination' in out and '/tmp/dl' in out
+        assert '--ca-file' in out and '/tmp/ca.pem' in out
 
     def test_passes_insecure_skip_tls_verify(self, tmp_path):
         rec = tmp_path / 'args.txt'
         action = _action({'chart_ref': 'nginx', 'skip_tls_certs_check': True,
+                          'destination': str(tmp_path),
                           'binary_path': str(_fake_helm(tmp_path, record=rec))})
         action.run(task_vars={})
         assert '--insecure-skip-tls-verify' in rec.read_text()
 
     def test_fast_path_sets_marker(self, tmp_path):
-        action = _action({'chart_ref': 'bitnami/nginx',
+        action = _action({'chart_ref': 'bitnami/nginx', 'destination': str(tmp_path),
                           'binary_path': str(_fake_helm(tmp_path))})
         result = action.run(task_vars={})
         assert result[FAST_PLUGIN_MARKER] is True

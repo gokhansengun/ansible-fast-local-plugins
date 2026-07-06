@@ -17,7 +17,7 @@ from ansible.utils.display import Display
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
-from _action_utils import _is_local, atomic_write, mark_fast_result, strict_guard  # noqa: E402
+from _action_utils import _is_local, atomic_write, mark_fast_result, normalize_arg_aliases, strict_guard  # noqa: E402
 
 display = Display()
 
@@ -33,6 +33,9 @@ _SUPPORTED_ARGS = frozenset({
 })
 
 _CHECKSUM_URL_SCHEMES = ('http', 'https', 'ftp', 'sftp', 'file')
+
+# Stock get_url argspec aliases, folded onto canonical names by normalize_arg_aliases.
+_ARG_ALIASES = {'username': 'url_username', 'password': 'url_password'}
 
 
 def _str2bool(value, default=False):
@@ -54,7 +57,7 @@ class ActionModule(ActionBase):
         del tmp
 
         conn = self._connection
-        args = self._task.args
+        args = normalize_arg_aliases(self._task.args, _ARG_ALIASES)
 
         display.debug(
             'fast_get_url v%s: transport=%r  _load_name=%r  class=%s.%s' % (
@@ -75,11 +78,17 @@ class ActionModule(ActionBase):
         if (not _is_local(conn) or self._play_context.become
                 or self._task.async_val or self._play_context.check_mode
                 or unsupported or checksum_is_url or dest_is_dir):
+            extra_reasons = []
             if unsupported:
                 display.debug('fast_get_url: unsupported args %r, delegating' % sorted(unsupported))
+                extra_reasons.append('unsupported arguments: %s' % ', '.join(sorted(unsupported)))
             else:
                 display.debug('fast_get_url: delegating to standard get_url module')
-            strict_guard(conn, self._play_context, self._task)
+            if checksum_is_url:
+                extra_reasons.append('checksum from URL')
+            if dest_is_dir:
+                extra_reasons.append('dest is a directory')
+            strict_guard(conn, self._play_context, self._task, extra_reasons=extra_reasons)
             return self._execute_module(task_vars=task_vars, wrap_async=self._task.async_val)
 
         return mark_fast_result(self._run_local(args, result))

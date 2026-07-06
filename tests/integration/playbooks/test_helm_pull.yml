@@ -55,7 +55,7 @@
       kubernetes.core.helm_pull:
         chart_ref: demo
         repo_url: "{{ repo_url }}"
-        chart_destination: "{{ work_dir }}/dl"
+        destination: "{{ work_dir }}/dl"
       register: r_pull
 
     - name: Assert chart was pulled
@@ -82,14 +82,13 @@
       kubernetes.core.helm_pull:
         chart_ref: demo
         repo_url: "{{ repo_url }}"
-        untar: true
-        untar_dir: "{{ work_dir }}/untarred"
-        chart_destination: "{{ work_dir }}/dl2"
+        untar_chart: true
+        destination: "{{ work_dir }}/dl2"
       register: r_untar
 
     - name: Stat the extracted chart definition
       stat:
-        path: "{{ work_dir }}/untarred/demo/Chart.yaml"
+        path: "{{ work_dir }}/dl2/demo/Chart.yaml"
       register: r_chart_yaml
 
     - name: Assert the chart was extracted
@@ -118,6 +117,7 @@
       kubernetes.core.helm_pull:
         chart_ref: demo
         repo_url: "{{ repo_url }}"
+        destination: "{{ work_dir }}/dl"
         binary_path: /nonexistent/helm
       register: r_bad_bin
       ignore_errors: true

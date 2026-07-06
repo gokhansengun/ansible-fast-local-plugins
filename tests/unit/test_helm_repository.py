@@ -47,6 +47,33 @@ class TestHelmRepositoryFastPath:
         result = action.run(task_vars={})
         assert result['repo_name'] == 'alias-repo'
 
+    def test_url_and_credential_aliases_stay_fast(self, tmp_path):
+        """url/username/password are genuine-argspec aliases; without
+        normalization they were silently dropped."""
+        received = tmp_path / 'args.txt'
+        fake_helm = tmp_path / 'helm'
+        fake_helm.write_text(f'#!/bin/sh\necho "$@" > {received}\nexit 0\n')
+        fake_helm.chmod(0o755)
+        action = _action({'name': 'myrepo', 'url': 'https://example.com/charts',
+                          'username': 'user', 'password': 'pass',
+                          'binary_path': str(fake_helm)})
+        result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result[FAST_PLUGIN_MARKER] is True
+        args_out = received.read_text()
+        assert 'https://example.com/charts' in args_out
+        assert '--username' in args_out
+        assert '--password' in args_out
+
+    def test_unsupported_arg_delegates(self):
+        """kubeconfig is honoured by genuine helm_repository but not read by the
+        fast path; it must delegate rather than silently ignore it."""
+        action = _action({'name': 'myrepo', 'repo_url': 'https://example.com/charts',
+                          'kubeconfig': '/kube/config'})
+        with mock_collection_run(FQCN, {'changed': True}) as mock:
+            action.run(task_vars={})
+        mock.assert_called_once()
+
     def test_missing_name_returns_failed(self):
         action = _action({'repo_url': 'https://example.com/charts'})
         result = action.run(task_vars={})
@@ -58,6 +85,57 @@ class TestHelmRepositoryFastPath:
         result = action.run(task_vars={})
         assert result['failed'] is True
         assert 'repo_url' in result['msg']
+
+    def test_absent_removes_repo(self, tmp_path):
+        """repo_state=absent must run `helm repo remove`, not `helm repo add`."""
+        received = tmp_path / 'args.txt'
+        fake_helm = tmp_path / 'helm'
+        fake_helm.write_text(f'#!/bin/sh\necho "$@" > {received}\nexit 0\n')
+        fake_helm.chmod(0o755)
+        action = _action({'name': 'myrepo', 'repo_state': 'absent',
+                          'binary_path': str(fake_helm)})
+        result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is True
+        assert result[FAST_PLUGIN_MARKER] is True
+        args_out = received.read_text()
+        assert 'repo remove myrepo' in args_out
+        assert 'add' not in args_out
+
+    def test_absent_via_state_alias_without_repo_url(self, tmp_path):
+        """`state` is the genuine alias for repo_state, and absent must not
+        require repo_url (matches the genuine module's required_if)."""
+        received = tmp_path / 'args.txt'
+        fake_helm = tmp_path / 'helm'
+        fake_helm.write_text(f'#!/bin/sh\necho "$@" > {received}\nexit 0\n')
+        fake_helm.chmod(0o755)
+        action = _action({'name': 'myrepo', 'state': 'absent',
+                          'binary_path': str(fake_helm)})
+        result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert 'repo remove myrepo' in received.read_text()
+
+    def test_absent_is_idempotent_when_repo_missing(self, tmp_path):
+        fake_helm = tmp_path / 'helm'
+        fake_helm.write_text(
+            '#!/bin/sh\necho \'Error: no repo named "myrepo" found\' >&2\nexit 1\n')
+        fake_helm.chmod(0o755)
+        action = _action({'name': 'myrepo', 'repo_state': 'absent',
+                          'binary_path': str(fake_helm)})
+        result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is False
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_absent_real_failure_returns_failed(self, tmp_path):
+        fake_helm = tmp_path / 'helm'
+        fake_helm.write_text('#!/bin/sh\necho "permission denied" >&2\nexit 1\n')
+        fake_helm.chmod(0o755)
+        action = _action({'name': 'myrepo', 'repo_state': 'absent',
+                          'binary_path': str(fake_helm)})
+        result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert 'helm repo remove failed' in result['msg']
 
     def test_helm_nonzero_exit_returns_failed(self, tmp_path):
         fake_helm = tmp_path / 'helm'

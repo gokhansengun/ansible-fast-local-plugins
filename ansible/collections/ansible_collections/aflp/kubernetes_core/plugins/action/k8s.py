@@ -14,6 +14,38 @@ display = Display()
 
 FAST_K8S_VERSION = '1.0'
 
+# Genuine kubernetes.core k8s argspec aliases (module_utils/args_common.py plus
+# the module's own delete_all), folded onto canonical names at the top of run().
+# Keep in sync with the pinned kubernetes.core version (requirements.yml).
+_ARG_ALIASES = {
+    'api': 'api_version', 'version': 'api_version',
+    'definition': 'resource_definition', 'inline': 'resource_definition',
+    'all': 'delete_all',
+    'verify_ssl': 'validate_certs', 'ssl_ca_cert': 'ca_cert',
+    'cert_file': 'client_cert', 'key_file': 'client_key',
+}
+
+
+# Arguments the in-process fast path honours (canonical names; aliases are
+# folded first). Anything else delegates to the genuine collection so its
+# behaviour is preserved rather than silently ignored. wait/wait_condition/
+# template/apply are listed because dedicated gates below delegate them, and
+# validate_certs is conditional (an explicit true also delegates).
+_SUPPORTED_ARGS = frozenset({
+    'state', 'kind', 'api_version', 'name', 'namespace', 'resource_definition',
+    'src', 'kubeconfig', 'context', 'binary_path', 'force', 'label_selectors',
+    'field_selectors', 'merge_type', 'server_side_apply', 'validate_certs',
+    'wait', 'wait_condition', 'template', 'apply',
+})
+
+
+def _bool_arg(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
 
 def _is_local(connection):
     # AFLP_DISABLE kill-switch: force fallback to the genuine kubernetes.core plugin.
@@ -29,7 +61,7 @@ def _is_local(connection):
     return False
 
 
-def _strict_guard(connection, play_context):
+def _strict_guard(connection, play_context, extra_reasons=None):
     # AFLP_STRICT: raise rather than fall back to the genuine collection, so an
     # unintended k8s task in a local-only run is caught. AFLP_DISABLE (the global
     # kill-switch) is an intentional fallback and suppresses this.
@@ -41,6 +73,10 @@ def _strict_guard(connection, play_context):
             reasons.append('non-local connection')
         if getattr(play_context, 'become', False):
             reasons.append('become')
+        if extra_reasons:
+            if isinstance(extra_reasons, str):
+                extra_reasons = [extra_reasons]
+            reasons.extend(extra_reasons)
         reason = ', '.join(reasons) or 'an unsupported argument'
         from ansible.errors import AnsibleActionFail
         raise AnsibleActionFail(
@@ -116,7 +152,7 @@ def _objects_from_definition(definition):
     return [obj]
 
 
-def _kubectl_diff(manifest_str, src, kubeconfig, context, binary_path):
+def _kubectl_diff(manifest_str, src, kubeconfig, context, binary_path, insecure=False):
     """Run kubectl diff to detect whether applying would change cluster state.
 
     Returns True if there are differences (apply would change something) or
@@ -132,6 +168,8 @@ def _kubectl_diff(manifest_str, src, kubeconfig, context, binary_path):
         cmd += ['--kubeconfig', kubeconfig]
     if context:
         cmd += ['--context', context]
+    if insecure:
+        cmd.append('--insecure-skip-tls-verify')
 
     try:
         proc = subprocess.run(
@@ -152,7 +190,7 @@ def _kubectl_diff(manifest_str, src, kubeconfig, context, binary_path):
 
 
 def _kubectl_apply(manifest_str, src, server_side, field_manager, force,
-                   kubeconfig, context, binary_path):
+                   kubeconfig, context, binary_path, insecure=False):
     """Run kubectl apply and return the resulting resource object.
 
     Raises RuntimeError on failure.
@@ -174,6 +212,8 @@ def _kubectl_apply(manifest_str, src, server_side, field_manager, force,
         cmd += ['--kubeconfig', kubeconfig]
     if context:
         cmd += ['--context', context]
+    if insecure:
+        cmd.append('--insecure-skip-tls-verify')
 
     try:
         proc = subprocess.run(
@@ -195,7 +235,7 @@ def _kubectl_apply(manifest_str, src, server_side, field_manager, force,
 
 
 def _kubectl_delete(kind, api_version, name, namespace, label_selectors,
-                    field_selectors, kubeconfig, context, binary_path):
+                    field_selectors, kubeconfig, context, binary_path, insecure=False):
     """Delete resource(s).  Returns True if something was actually deleted.
 
     Uses --ignore-not-found so a missing resource is not an error.
@@ -216,6 +256,8 @@ def _kubectl_delete(kind, api_version, name, namespace, label_selectors,
         cmd += ['--kubeconfig', kubeconfig]
     if context:
         cmd += ['--context', context]
+    if insecure:
+        cmd.append('--insecure-skip-tls-verify')
 
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -229,7 +271,7 @@ def _kubectl_delete(kind, api_version, name, namespace, label_selectors,
 
 
 def _kubectl_patch(kind, api_version, name, namespace, patch_data, merge_type,
-                   kubeconfig, context, binary_path):
+                   kubeconfig, context, binary_path, insecure=False):
     """Run kubectl patch and return the patched resource object.
 
     Raises RuntimeError on failure.
@@ -251,6 +293,8 @@ def _kubectl_patch(kind, api_version, name, namespace, patch_data, merge_type,
         cmd += ['--kubeconfig', kubeconfig]
     if context:
         cmd += ['--context', context]
+    if insecure:
+        cmd.append('--insecure-skip-tls-verify')
 
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -292,7 +336,10 @@ class ActionModule(ActionBase):
         del tmp
 
         conn = self._connection
-        args = self._task.args
+        args = dict(self._task.args)
+        for alias, canonical in _ARG_ALIASES.items():
+            if alias in args and canonical not in args:
+                args[canonical] = args.pop(alias)
 
         display.debug(
             'fast_k8s v%s: transport=%r  _load_name=%r  class=%s.%s' % (
@@ -304,12 +351,27 @@ class ActionModule(ActionBase):
             )
         )
 
-        if not _is_local(conn) or self._play_context.become:
-            _strict_guard(conn, self._play_context)
-            display.debug('fast_k8s: non-local or become, delegating to collection plugin')
+        unsupported = set(args) - _SUPPORTED_ARGS
+        # validate_certs=false maps onto kubectl --insecure-skip-tls-verify; an
+        # explicit true would have to *enforce* verification over whatever the
+        # kubeconfig says, which only the genuine client can do.
+        if _bool_arg(args.get('validate_certs')):
+            unsupported = unsupported | {'validate_certs'}
+        if not _is_local(conn) or self._play_context.become or unsupported:
+            extra_reasons = None
+            if unsupported:
+                extra_reasons = ['unsupported arguments: %s' % ', '.join(sorted(unsupported))]
+                display.debug('fast_k8s: unsupported args %r, delegating' % sorted(unsupported))
+            _strict_guard(conn, self._play_context, extra_reasons=extra_reasons)
+            display.debug('fast_k8s: non-local/become/unsupported args, delegating to collection plugin')
             _Standard = _load_standard_action()
             if _Standard is not None:
                 return self._delegate(task_vars, _Standard)
+            if unsupported:
+                return dict(failed=True, msg=(
+                    'kubernetes.core.k8s: arguments not supported by the fast local '
+                    'override (%s), and the genuine kubernetes.core collection is not '
+                    'installed to delegate to.' % ', '.join(sorted(unsupported))))
             if not _is_local(conn):
                 return dict(failed=True, msg=(
                     'kubernetes.core.k8s is provided by the fast local override, '
@@ -326,7 +388,8 @@ class ActionModule(ActionBase):
 
         # wait/template require complex logic not worth reimplementing; delegate.
         if args.get('wait') or args.get('wait_condition') or args.get('template'):
-            _strict_guard(conn, self._play_context)
+            _strict_guard(conn, self._play_context,
+                          extra_reasons=['wait/wait_condition/template'])
             display.debug('fast_k8s: wait/template set, delegating to collection plugin')
             _Standard = _load_standard_action()
             if _Standard is None:
@@ -339,6 +402,7 @@ class ActionModule(ActionBase):
 
         # apply=false means create/replace semantics which differ significantly; delegate.
         if args.get('apply') is False:
+            _strict_guard(conn, self._play_context, extra_reasons=['apply=false'])
             display.debug('fast_k8s: apply=false, delegating to collection plugin')
             _Standard = _load_standard_action()
             if _Standard is None:
@@ -363,6 +427,7 @@ class ActionModule(ActionBase):
         src = args.get('src')
         kubeconfig = args.get('kubeconfig')
         context = args.get('context')
+        insecure = _bool_arg(args.get('validate_certs')) is False
         binary_path = args.get('binary_path') or 'kubectl'
         force = bool(args.get('force', False))
         label_selectors = args.get('label_selectors') or []
@@ -391,6 +456,7 @@ class ActionModule(ActionBase):
                         field_selectors=field_selectors,
                         kubeconfig=kubeconfig,
                         context=context,
+                        insecure=insecure,
                         binary_path=binary_path,
                     )
                 except RuntimeError as e:
@@ -423,6 +489,7 @@ class ActionModule(ActionBase):
                             field_selectors=[],
                             kubeconfig=kubeconfig,
                             context=context,
+                        insecure=insecure,
                             binary_path=binary_path,
                         ) or changed
                     except RuntimeError as e:
@@ -464,6 +531,7 @@ class ActionModule(ActionBase):
                     src=src,
                     kubeconfig=kubeconfig,
                     context=context,
+                        insecure=insecure,
                     binary_path=binary_path,
                 )
             except RuntimeError as e:
@@ -484,6 +552,7 @@ class ActionModule(ActionBase):
                     force=force,
                     kubeconfig=kubeconfig,
                     context=context,
+                        insecure=insecure,
                     binary_path=binary_path,
                 )
             except RuntimeError as e:
@@ -519,6 +588,7 @@ class ActionModule(ActionBase):
                     merge_type=merge_type,
                     kubeconfig=kubeconfig,
                     context=context,
+                        insecure=insecure,
                     binary_path=binary_path,
                 )
             except RuntimeError as e:

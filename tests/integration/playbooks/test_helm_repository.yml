@@ -30,6 +30,32 @@
         that:
           - r_force.changed
 
+    # --- remove repo (state is the genuine alias for repo_state) ---
+    - name: Remove the repo
+      kubernetes.core.helm_repository:
+        name: bitnami-aflp-test
+        state: absent
+      register: r_remove
+
+    - name: Assert repo was removed
+      assert:
+        that:
+          - r_remove.changed
+          - r_remove['__produced_by_fast_plugin'] | default(false)
+
+    # --- removing an already-absent repo is idempotent ---
+    - name: Remove the repo again
+      kubernetes.core.helm_repository:
+        name: bitnami-aflp-test
+        repo_state: absent
+      register: r_remove_again
+
+    - name: Assert second removal did not change anything
+      assert:
+        that:
+          - not r_remove_again.changed
+          - r_remove_again['__produced_by_fast_plugin'] | default(false)
+
     # --- missing required args ---
     - name: Call without repo_url (expect failure)
       kubernetes.core.helm_repository:

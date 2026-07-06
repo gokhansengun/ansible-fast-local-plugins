@@ -59,6 +59,28 @@ class TestHelmInfoFastPath:
         assert result['status']['name'] == 'test-release'
         assert result['status']['info']['status'] == 'deployed'
 
+    def test_name_and_namespace_aliases(self, tmp_path):
+        """name/namespace are genuine-argspec aliases for release_name /
+        release_namespace; without normalization helm was run without -n and
+        queried the default namespace."""
+        rec = tmp_path / 'args.txt'
+        action = _action({'name': 'test-release', 'namespace': 'test-ns',
+                          'binary_path': str(_fake_helm(tmp_path, record=rec))})
+        result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        out = rec.read_text()
+        assert '--namespace' in out
+        assert 'test-ns' in out
+
+    def test_unsupported_arg_delegates(self):
+        """ca_cert is honoured by genuine helm_info but not read by the fast
+        path; it must delegate rather than silently ignore it."""
+        action = _action({'release_name': 'r', 'release_namespace': 'ns',
+                          'ca_cert': '/tmp/ca.pem'})
+        with mock_collection_run(FQCN, {'changed': False, 'status': {}}) as mock:
+            action.run(task_vars={})
+        mock.assert_called_once()
+
     def test_missing_release_name_returns_failed(self):
         action = _action({'release_namespace': 'test-ns'})
         result = action.run(task_vars={})

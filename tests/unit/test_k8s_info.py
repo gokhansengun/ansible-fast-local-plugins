@@ -174,6 +174,16 @@ class TestK8sInfoFastPath:
         assert len(result['resources']) == 1
         assert result['resources'][0]['metadata']['name'] == 'p1'
 
+    def test_api_alias_selects_api_version(self):
+        """`api`/`version` are genuine-argspec aliases for api_version; without
+        normalization the query silently targeted api_version=v1."""
+        action = _action({'kind': 'Deployment', 'api': 'apps/v1'})
+        with patch('subprocess.run', return_value=_kubectl_list([])) as mock_run:
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        cmd = ' '.join(mock_run.call_args[0][0])
+        assert 'deployment.apps' in cmd
+
     def test_missing_kind_returns_failed(self):
         action = _action({'namespace': 'default'})
         result = action.run(task_vars={})
@@ -249,6 +259,29 @@ class TestK8sInfoFastPath:
         result = action.run(task_vars={})
         assert result['failed'] is True
         assert FAST_PLUGIN_MARKER not in result
+
+
+class TestK8sInfoUnsupportedArgs:
+    def test_unsupported_arg_delegates(self):
+        action = _action({'kind': 'Pod', 'wait': True})
+        with mock_collection_run(FQCN, {'changed': False, 'resources': []}) as mock:
+            action.run(task_vars={})
+        mock.assert_called_once()
+
+    def test_validate_certs_true_delegates(self):
+        action = _action({'kind': 'Pod', 'validate_certs': True})
+        with mock_collection_run(FQCN, {'changed': False, 'resources': []}) as mock:
+            action.run(task_vars={})
+        mock.assert_called_once()
+
+    def test_validate_certs_false_stays_fast_with_flag(self):
+        action = _action({'kind': 'Pod', 'validate_certs': False})
+        with patch('subprocess.run', return_value=_kubectl_list([])) as mock_run:
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result[FAST_PLUGIN_MARKER] is True
+        cmd = mock_run.call_args[0][0]
+        assert '--insecure-skip-tls-verify' in cmd
 
 
 class TestK8sInfoGenuineMissing:

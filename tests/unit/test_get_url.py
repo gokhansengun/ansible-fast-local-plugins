@@ -46,6 +46,19 @@ class TestGetUrlFastPath:
         assert dest.read_bytes() == b'DATA'
         assert result[FAST_PLUGIN_MARKER] is True
 
+    def test_username_password_aliases_stay_fast(self, tmp_path):
+        """username/password are stock-argspec aliases; they must not trigger fallback."""
+        dest = tmp_path / 'out.bin'
+        action, mod = _make({'url': 'http://h/file', 'dest': str(dest),
+                             'username': 'u', 'password': 'p'})
+        m = MagicMock(return_value=_FakeResp(b'DATA'))
+        with patch.object(mod, 'open_url', m):
+            result = action.run(task_vars={})
+        assert result[FAST_PLUGIN_MARKER] is True
+        kwargs = m.call_args.kwargs
+        assert kwargs['url_username'] == 'u'
+        assert kwargs['url_password'] == 'p'
+
     def test_download_is_idempotent(self, tmp_path):
         dest = tmp_path / 'out.bin'
         dest.write_bytes(b'DATA')
@@ -164,6 +177,14 @@ class TestGetUrlFallback:
     def test_delegates_for_unsupported_args(self, tmp_path):
         action = make_action('get_url', {'url': 'http://h/f', 'dest': str(tmp_path / 'x'),
                                          'owner': 'root'})
+        with patch.object(action, '_execute_module', return_value={'changed': True}) as mock_exec:
+            action.run(task_vars={})
+        mock_exec.assert_called_once()
+
+    def test_delegates_when_alias_and_canonical_conflict(self, tmp_path):
+        """Both username and url_username set: let the module's precedence rules decide."""
+        action = make_action('get_url', {'url': 'http://h/f', 'dest': str(tmp_path / 'x'),
+                                         'username': 'a', 'url_username': 'b'})
         with patch.object(action, '_execute_module', return_value={'changed': True}) as mock_exec:
             action.run(task_vars={})
         mock_exec.assert_called_once()

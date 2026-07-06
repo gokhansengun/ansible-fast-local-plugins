@@ -11,6 +11,9 @@ services:
       interval: 5s
       timeout: 10s
       retries: 15
+      # Grace for cold starts while the host is busy building the controller
+      # image (probe failures in this window don't count against retries).
+      start_period: 60s
 
   kind-setup:
     build:
@@ -40,6 +43,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+      # Grace for cold starts while the host is busy building the controller
+      # image (probe failures in this window don't count against retries).
+      start_period: 60s
 
   vault-seed:
     image: hashicorp/vault:1.21.4
@@ -106,3 +112,10 @@ volumes:
 networks:
   test-net:
     driver: bridge
+    ipam:
+      config:
+        # Pinned to a subnet the corporate VPN does not push routes for.
+        # Docker's auto-assigned 172.19.0.0/16 collided with more-specific
+        # VPN routes (172.19.0.0/24 via tun0), which blackholed all reply
+        # traffic to the containers and broke registry pulls inside dind.
+        - subnet: 172.28.0.0/16

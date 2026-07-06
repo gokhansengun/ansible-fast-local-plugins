@@ -12,6 +12,25 @@ display = Display()
 
 FAST_HELM_INFO_VERSION = '1.0'
 
+# Genuine kubernetes.core helm_info argspec aliases (the module plus
+# module_utils/helm_args_common.py), folded onto canonical names at the top of
+# run(). Without this, `namespace:` was silently dropped and helm queried the
+# default namespace. Keep in sync with the pinned kubernetes.core version.
+_ARG_ALIASES = {
+    'name': 'release_name', 'namespace': 'release_namespace',
+    'kube_context': 'context', 'kubeconfig_path': 'kubeconfig',
+    'ssl_ca_cert': 'ca_cert', 'verify_ssl': 'validate_certs',
+}
+
+
+# Arguments the in-process fast path honours (canonical names; aliases are
+# folded first). Anything else delegates to the genuine collection so its
+# behaviour is preserved rather than silently ignored.
+_SUPPORTED_ARGS = frozenset({
+    'release_name', 'release_namespace', 'release_state', 'get_all_values',
+    'kubeconfig', 'context', 'host', 'api_key', 'validate_certs', 'binary_path',
+})
+
 
 def _is_local(connection):
     # AFLP_DISABLE kill-switch: force fallback to the genuine kubernetes.core plugin.
@@ -27,7 +46,7 @@ def _is_local(connection):
     return False
 
 
-def _strict_guard(connection, play_context):
+def _strict_guard(connection, play_context, extra_reasons=None):
     # AFLP_STRICT: raise rather than fall back to the genuine collection, so an
     # unintended k8s task in a local-only run is caught. AFLP_DISABLE (the global
     # kill-switch) is an intentional fallback and suppresses this.
@@ -39,6 +58,10 @@ def _strict_guard(connection, play_context):
             reasons.append('non-local connection')
         if getattr(play_context, 'become', False):
             reasons.append('become')
+        if extra_reasons:
+            if isinstance(extra_reasons, str):
+                extra_reasons = [extra_reasons]
+            reasons.extend(extra_reasons)
         reason = ', '.join(reasons) or 'an unsupported argument'
         from ansible.errors import AnsibleActionFail
         raise AnsibleActionFail(
@@ -109,7 +132,10 @@ class ActionModule(ActionBase):
         del tmp
 
         conn = self._connection
-        args = self._task.args
+        args = dict(self._task.args)
+        for alias, canonical in _ARG_ALIASES.items():
+            if alias in args and canonical not in args:
+                args[canonical] = args.pop(alias)
 
         display.debug(
             'fast_helm_info v%s: transport=%r  _load_name=%r  class=%s.%s' % (
@@ -121,9 +147,14 @@ class ActionModule(ActionBase):
             )
         )
 
-        if not _is_local(conn) or self._play_context.become:
-            _strict_guard(conn, self._play_context)
-            display.debug('fast_helm_info: non-local or become, delegating to collection plugin')
+        unsupported = set(args) - _SUPPORTED_ARGS
+        if not _is_local(conn) or self._play_context.become or unsupported:
+            extra_reasons = None
+            if unsupported:
+                extra_reasons = ['unsupported arguments: %s' % ', '.join(sorted(unsupported))]
+                display.debug('fast_helm_info: unsupported args %r, delegating' % sorted(unsupported))
+            _strict_guard(conn, self._play_context, extra_reasons=extra_reasons)
+            display.debug('fast_helm_info: non-local/become/unsupported args, delegating to collection plugin')
             _Standard = _load_standard_action()
             if _Standard is not None:
                 std = _Standard(
@@ -139,6 +170,11 @@ class ActionModule(ActionBase):
                     'Run the task on the controller (e.g. delegate_to: localhost) '
                     'or install the genuine kubernetes.core collection.'
                 ))
+            if unsupported:
+                return dict(failed=True, msg=(
+                    'kubernetes.core.helm_info: arguments not supported by the fast local '
+                    'override (%s), and the genuine kubernetes.core collection is not '
+                    'installed to delegate to.' % ', '.join(sorted(unsupported))))
             display.warning(
                 'fast_helm_info: become cannot be honoured because no genuine '
                 'kubernetes.core collection is installed; continuing with the '

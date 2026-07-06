@@ -87,6 +87,24 @@ def _is_local(connection):
     return False
 
 
+def normalize_arg_aliases(args, alias_map):
+    """Return a copy of ``args`` with argspec aliases folded onto their
+    canonical names (``alias_map`` maps alias -> canonical).
+
+    Alias resolution normally happens in the module's AnsibleModule argspec,
+    which action plugins never run — without this, an aliased task either looks
+    "unsupported" to a whitelist gate (needless fallback) or has the argument
+    silently ignored. If a task sets both an alias and its canonical name, the
+    alias is left in place so a whitelist gate treats it as unsupported and the
+    stock module applies its own precedence rules.
+    """
+    args = dict(args)
+    for alias, canonical in alias_map.items():
+        if alias in args and canonical not in args:
+            args[canonical] = args.pop(alias)
+    return args
+
+
 # Strict mode. When AFLP_STRICT is truthy, a fast plugin that would fall back to
 # stock ansible-core raises instead. On a local-only controller every task is
 # expected to hit the fast path, so an unexpected fallback (a stray become, a
