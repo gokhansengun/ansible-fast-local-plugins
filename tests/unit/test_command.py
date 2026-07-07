@@ -35,6 +35,19 @@ class TestCommandFastPath:
         result = action.run(task_vars={})
         assert result['stdout'] == 'argv'
 
+    def test_strip_empty_ends_string_false_is_coerced(self):
+        # stock argspec: strip_empty_ends is type=bool. A templated string
+        # "false" must disable stripping, not be treated as truthy.
+        action = make_action('command', {
+            'argv': ['printf', 'hello\n\n'], 'strip_empty_ends': 'false'})
+        result = action.run(task_vars={})
+        assert result['stdout'] == 'hello\n\n'
+
+    def test_strip_empty_ends_default_strips(self):
+        action = make_action('command', {'argv': ['printf', 'hello\n\n']})
+        result = action.run(task_vars={})
+        assert result['stdout'] == 'hello'
+
     def test_shell_pipe_does_not_work(self):
         # Without a shell, the pipe character is passed as a literal argument,
         # so the command will fail or produce unexpected output — not pipe output.

@@ -32,6 +32,27 @@ _SUPPORTED_ARGS = frozenset({
 })
 
 
+def _bool_arg(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _as_list(value):
+    # Mirror AnsibleModule's check_type_list (type=list): a bare string is
+    # comma-split, a scalar is wrapped, a list passes through. The fast path
+    # skips argspec, so callers must coerce list-typed args themselves.
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [v for v in value.split(',')]
+    return [value]
+
+
 def _is_local(connection):
     # AFLP_DISABLE kill-switch: force fallback to the genuine kubernetes.core plugin.
     if os.environ.get('AFLP_DISABLE', '').strip().lower() in ('1', 'true', 'yes', 'on'):
@@ -193,7 +214,7 @@ class ActionModule(ActionBase):
             return dict(failed=True, msg='release_name is required')
 
         global_args = _helm_global_args(args)
-        release_state = args.get('release_state') or ['deployed', 'failed']
+        release_state = _as_list(args.get('release_state')) or ['deployed', 'failed']
 
         cmd = [binary_path, 'status', release_name, '--output', 'json'] + global_args
         try:
@@ -220,7 +241,7 @@ class ActionModule(ActionBase):
             result.update(dict(changed=False, status=None))
             return result
 
-        if args.get('get_all_values'):
+        if _bool_arg(args.get('get_all_values')):
             values_cmd = [binary_path, 'get', 'values', release_name,
                           '--all', '--output', 'json'] + global_args
             try:

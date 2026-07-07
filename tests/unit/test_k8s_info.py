@@ -66,6 +66,37 @@ class TestResourceType:
 
 
 # ------------------------------------------------------------------ #
+# argspec coercion helpers (_as_list mirrors type=list check_type_list) #
+# ------------------------------------------------------------------ #
+class TestArgspecCoercion:
+    def test_as_list_passes_through_list(self):
+        assert _mod._as_list(['a=1', 'b=2']) == ['a=1', 'b=2']
+
+    def test_as_list_none_is_empty(self):
+        assert _mod._as_list(None) == []
+
+    def test_as_list_comma_string_is_split(self):
+        # stock argspec (type=list) comma-splits a bare string; without this the
+        # fast path would ','.join() over the string char-by-char.
+        assert _mod._as_list('app=foo,tier=bar') == ['app=foo', 'tier=bar']
+
+    def test_as_list_single_string_is_wrapped(self):
+        assert _mod._as_list('app=foo') == ['app=foo']
+
+    def test_selector_string_joins_intact_not_char_split(self):
+        # End-to-end: a string label_selector must reach kubectl as one --selector
+        # value, not exploded into per-character selectors.
+        with patch('subprocess.run', return_value=_kubectl_list([])) as run:
+            _mod._kubectl_get(
+                kind='Pod', api_version='v1', name=None, namespace=None,
+                label_selectors=_mod._as_list('app=foo,tier=bar'),
+                field_selectors=[], kubeconfig=None, context=None,
+                binary_path='kubectl')
+        cmd = run.call_args[0][0]
+        assert 'app=foo,tier=bar' in cmd
+
+
+# ------------------------------------------------------------------ #
 # _kubectl_get helper                                                  #
 # ------------------------------------------------------------------ #
 class TestKubectlGet:

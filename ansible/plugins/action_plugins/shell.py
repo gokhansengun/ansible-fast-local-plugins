@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 from ansible.module_utils.common.text.converters import to_bytes, to_native, to_text
+from ansible.module_utils.parsing.convert_bool import boolean
 from ansible.plugins.action import ActionBase
 from ansible.utils.display import Display
 
@@ -83,8 +84,8 @@ class ActionModule(ActionBase):
         creates = args.get('creates')
         removes = args.get('removes')
         stdin_data = args.get('stdin')
-        stdin_add_newline = args.get('stdin_add_newline', True)
-        strip_empty_ends = args.get('strip_empty_ends', True)
+        stdin_add_newline = boolean(args.get('stdin_add_newline', True), strict=False)
+        strip_empty_ends = boolean(args.get('strip_empty_ends', True), strict=False)
 
         if creates:
             creates = os.path.expanduser(os.path.expandvars(creates))

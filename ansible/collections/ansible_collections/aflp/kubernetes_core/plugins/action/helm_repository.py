@@ -34,6 +34,14 @@ _SUPPORTED_ARGS = frozenset({
 })
 
 
+def _bool_arg(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 def _is_local(connection):
     # AFLP_DISABLE kill-switch: force fallback to the genuine kubernetes.core plugin.
     if os.environ.get('AFLP_DISABLE', '').strip().lower() in ('1', 'true', 'yes', 'on'):
@@ -182,11 +190,11 @@ class ActionModule(ActionBase):
             cmd += ['--username', args['repo_username']]
         if args.get('repo_password'):
             cmd += ['--password', args['repo_password']]
-        if args.get('pass_credentials'):
+        if _bool_arg(args.get('pass_credentials')):
             cmd.append('--pass-credentials')
-        if args.get('insecure_skip_tls_verify'):
+        if _bool_arg(args.get('insecure_skip_tls_verify')):
             cmd.append('--insecure-skip-tls-verify')
-        if args.get('force_update'):
+        if _bool_arg(args.get('force_update')):
             cmd.append('--force-update')
         if args.get('ca_cert'):
             cmd += ['--ca-file', args['ca_cert']]

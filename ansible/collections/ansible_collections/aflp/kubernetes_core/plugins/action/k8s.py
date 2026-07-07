@@ -47,6 +47,19 @@ def _bool_arg(value):
     return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
 
 
+def _as_list(value):
+    # Mirror AnsibleModule's check_type_list (type=list): a bare string is
+    # comma-split, a scalar is wrapped, a list passes through. The fast path
+    # skips argspec, so callers must coerce list-typed args themselves.
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [v for v in value.split(',')]
+    return [value]
+
+
 def _is_local(connection):
     # AFLP_DISABLE kill-switch: force fallback to the genuine kubernetes.core plugin.
     if os.environ.get('AFLP_DISABLE', '').strip().lower() in ('1', 'true', 'yes', 'on'):
@@ -387,7 +400,7 @@ class ActionModule(ActionBase):
             )
 
         # wait/template require complex logic not worth reimplementing; delegate.
-        if args.get('wait') or args.get('wait_condition') or args.get('template'):
+        if _bool_arg(args.get('wait')) or args.get('wait_condition') or args.get('template'):
             _strict_guard(conn, self._play_context,
                           extra_reasons=['wait/wait_condition/template'])
             display.debug('fast_k8s: wait/template set, delegating to collection plugin')
@@ -401,7 +414,7 @@ class ActionModule(ActionBase):
             return self._delegate(task_vars, _Standard)
 
         # apply=false means create/replace semantics which differ significantly; delegate.
-        if args.get('apply') is False:
+        if _bool_arg(args.get('apply')) is False:
             _strict_guard(conn, self._play_context, extra_reasons=['apply=false'])
             display.debug('fast_k8s: apply=false, delegating to collection plugin')
             _Standard = _load_standard_action()
@@ -429,9 +442,9 @@ class ActionModule(ActionBase):
         context = args.get('context')
         insecure = _bool_arg(args.get('validate_certs')) is False
         binary_path = args.get('binary_path') or 'kubectl'
-        force = bool(args.get('force', False))
-        label_selectors = args.get('label_selectors') or []
-        field_selectors = args.get('field_selectors') or []
+        force = _bool_arg(args.get('force', False))
+        label_selectors = _as_list(args.get('label_selectors'))
+        field_selectors = _as_list(args.get('field_selectors'))
         merge_type = args.get('merge_type')
 
         server_side_apply = args.get('server_side_apply')

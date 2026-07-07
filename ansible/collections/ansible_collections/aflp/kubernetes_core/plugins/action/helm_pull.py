@@ -34,6 +34,14 @@ _SUPPORTED_ARGS = frozenset({
 })
 
 
+def _bool_arg(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 def _is_local(connection):
     # AFLP_DISABLE kill-switch: force fallback to the genuine kubernetes.core plugin.
     if os.environ.get('AFLP_DISABLE', '').strip().lower() in ('1', 'true', 'yes', 'on'):
@@ -148,19 +156,19 @@ class ActionModule(ActionBase):
             cmd += ['--username', args['repo_username']]
         if args.get('repo_password'):
             cmd += ['--password', args['repo_password']]
-        if args.get('pass_credentials'):
+        if _bool_arg(args.get('pass_credentials')):
             cmd.append('--pass-credentials')
-        if args.get('provenance'):
+        if _bool_arg(args.get('provenance')):
             cmd.append('--prov')
-        if args.get('verify_chart'):
+        if _bool_arg(args.get('verify_chart')):
             cmd.append('--verify')
         if args.get('verify_chart_keyring'):
             cmd += ['--keyring', args['verify_chart_keyring']]
-        if args.get('chart_devel'):
+        if _bool_arg(args.get('chart_devel')):
             cmd.append('--devel')
-        if args.get('skip_tls_certs_check') or args.get('insecure_skip_tls_verify'):
+        if _bool_arg(args.get('skip_tls_certs_check')) or _bool_arg(args.get('insecure_skip_tls_verify')):
             cmd.append('--insecure-skip-tls-verify')
-        if args.get('untar_chart'):
+        if _bool_arg(args.get('untar_chart')):
             cmd.append('--untar')
         if args.get('chart_ca_cert'):
             cmd += ['--ca-file', args['chart_ca_cert']]

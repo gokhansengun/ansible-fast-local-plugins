@@ -134,6 +134,16 @@ class TestUriFastPath:
         assert not result.get('failed')
         assert result['status'] == 201
 
+    def test_comma_string_status_code_split(self):
+        # `status_code: 200,204` reaches the plugin as the string "200,204";
+        # stock argspec (type=list, elements=int) splits it before coercion.
+        action, mod = _make({'url': 'http://test/', 'status_code': '200,204'})
+        resp = _FakeResp(status=204, headers={'Content-Type': 'text/plain'})
+        with patch.object(mod, 'open_url', return_value=resp):
+            result = action.run(task_vars={})
+        assert not result.get('failed')
+        assert result['status'] == 204
+
     def test_http_error_treated_as_response(self):
         action, mod = _make({'url': 'http://test/', 'status_code': [404],
                              'return_content': True})

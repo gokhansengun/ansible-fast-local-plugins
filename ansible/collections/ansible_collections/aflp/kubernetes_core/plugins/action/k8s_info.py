@@ -40,6 +40,19 @@ def _bool_arg(value):
     return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
 
 
+def _as_list(value):
+    # Mirror AnsibleModule's check_type_list (type=list): a bare string is
+    # comma-split, a scalar is wrapped, a list passes through. The fast path
+    # skips argspec, so callers must coerce list-typed args themselves.
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [v for v in value.split(',')]
+    return [value]
+
+
 def _is_local(connection):
     # AFLP_DISABLE kill-switch: force fallback to the genuine kubernetes.core plugin.
     if os.environ.get('AFLP_DISABLE', '').strip().lower() in ('1', 'true', 'yes', 'on'):
@@ -238,8 +251,8 @@ class ActionModule(ActionBase):
                 api_version=args.get('api_version', 'v1'),
                 name=args.get('name'),
                 namespace=args.get('namespace'),
-                label_selectors=args.get('label_selectors') or [],
-                field_selectors=args.get('field_selectors') or [],
+                label_selectors=_as_list(args.get('label_selectors')),
+                field_selectors=_as_list(args.get('field_selectors')),
                 kubeconfig=args.get('kubeconfig'),
                 context=args.get('context'),
                 insecure=_bool_arg(args.get('validate_certs')) is False,

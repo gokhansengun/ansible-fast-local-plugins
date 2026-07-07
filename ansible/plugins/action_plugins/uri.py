@@ -103,24 +103,31 @@ class ActionModule(ActionBase):
         validate_certs = _str2bool(args.get('validate_certs', True), default=True)
         force_basic_auth = _str2bool(args.get('force_basic_auth', False))
         follow_redirects = args.get('follow_redirects', 'safe')
-        timeout = args.get('timeout', 30)
+        timeout = int(args.get('timeout', 30))  # stock argspec: type=int
+        decompress = _str2bool(args.get('decompress', True), default=True)
         http_agent = args.get('http_agent', 'ansible-httpget')
         body_format = str(args.get('body_format', 'raw')).lower()
 
         headers = dict(args.get('headers') or {})
         data = self._encode_body(args.get('body'), body_format, headers)
 
+        # Stock uri declares status_code as type=list, elements=int, so
+        # AnsibleModule's check_type_list splits a comma-separated string
+        # ("200,204") into a list before coercing each element to int. The
+        # fast path skips argspec, so replicate that here.
         status_code = args.get('status_code', [200])
-        if not isinstance(status_code, (list, tuple)):
+        if isinstance(status_code, str):
+            status_code = status_code.split(',')
+        elif not isinstance(status_code, (list, tuple)):
             status_code = [status_code]
-        status_code = [int(x) for x in status_code]
+        status_code = [int(str(x).strip()) for x in status_code]
 
         start = time.time()
         try:
             resp_info, body = self._request(
                 url, method, data, headers, timeout, validate_certs,
                 args.get('url_username'), args.get('url_password'),
-                force_basic_auth, follow_redirects, http_agent,
+                force_basic_auth, follow_redirects, http_agent, decompress,
             )
         except URLError as e:
             return dict(failed=True, url=url, status=-1,
@@ -170,7 +177,7 @@ class ActionModule(ActionBase):
 
     def _request(self, url, method, data, headers, timeout, validate_certs,
                  url_username, url_password, force_basic_auth, follow_redirects,
-                 http_agent):
+                 http_agent, decompress=True):
         """Perform the HTTP request, returning (info_dict, body_bytes).
 
         A non-2xx response arrives as an HTTPError, which is itself a readable
@@ -183,6 +190,7 @@ class ActionModule(ActionBase):
                 url_username=url_username, url_password=url_password,
                 force_basic_auth=force_basic_auth,
                 follow_redirects=follow_redirects, http_agent=http_agent,
+                decompress=decompress,
             )
             info = {'status': r.getcode(), 'url': r.geturl()}
             info.update({k: v for k, v in r.headers.items()})

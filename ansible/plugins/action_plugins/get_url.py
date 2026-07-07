@@ -194,7 +194,7 @@ class ActionModule(ActionBase):
             url,
             method='GET',
             headers=dict(args.get('headers') or {}),
-            timeout=args.get('timeout', 10),
+            timeout=int(args.get('timeout', 10)),  # stock argspec: type=int
             validate_certs=_str2bool(args.get('validate_certs', True), default=True),
             url_username=args.get('url_username'),
             url_password=args.get('url_password'),
