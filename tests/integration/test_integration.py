@@ -195,6 +195,40 @@ def test_hashivault_read():
 
 
 @pytest.mark.integration
+def test_hashivault_read_not_found_parity():
+    """A missing secret must be reported identically by the fast plugin and stock.
+
+    Kept out of test_parity because that harness denylists `msg` (human-facing
+    text) and requires a marked fast result — a failed result is never marked.
+    Here the message *is* the contract: roles read-or-create by branching on
+    stock's "is not in vault" wording.
+    """
+    marker = '__produced_by_fast_plugin'
+
+    def _mode(tag, env):
+        out = f'/tmp/aflp_hashivault_not_found_{tag}.json'
+        _assert_playbook(_run(
+            os.path.join(PLAYBOOK_DIR, 'hashivault_not_found_parity.yml'),
+            extra_vars={'result_out': out},
+            env=env,
+        ))
+        with open(out) as fh:
+            return json.load(fh)
+
+    stock = _mode('stock', env={'AFLP_DISABLE': '1'})
+    fast = _mode('fast', env=None)
+
+    # Validity: the successful probe proves which path each run actually took.
+    assert fast['probe'].get(marker) is True, 'fast run was not marked — did the fast path run?'
+    assert marker not in stock['probe'], 'stock run carried the fast marker — kill-switch did not take effect'
+
+    for key in ('failed', 'rc', 'msg'):
+        assert fast['missing'].get(key) == stock['missing'].get(key), (
+            f'not-found parity diff on {key!r}: '
+            f'fast={fast["missing"].get(key)!r} stock={stock["missing"].get(key)!r}')
+
+
+@pytest.mark.integration
 def test_find_next_helm_release_number():
     _assert_playbook(_run(os.path.join(PLAYBOOK_DIR, 'test_find_next_helm_release_number.yml')))
 

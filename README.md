@@ -147,7 +147,7 @@ suppresses strict mode rather than making every task fail.
 | `get_url` | download via `open_url` + checksum-based atomic write | non-local, `become`, async, check-mode, dir `dest`, checksum-URL, file-attr args |
 | `command` | `subprocess.run` (no shell); honors `chdir`/`environment` | non-local, `become`, async, check-mode |
 | `shell` | `subprocess.run` (no Ansible module overhead); honors `chdir`/`environment` | non-local, `become`, async, check-mode |
-| `hashivault_read` | `hvac.Client` in-process | non-local |
+| `hashivault_read` | `hvac.Client` in-process | non-local, non-token `authtype`, unsupported args |
 | `find_next_helm_release_number` | `kubectl get secrets` via subprocess | non-local |
 
 The `kubernetes.core` collection overrides (`k8s`, `k8s_info`, `helm_repository`, `helm_pull`, `helm_info`) ship as the separate `aflp.kubernetes_core` collection and follow the same pattern via `kubectl`/`helm`. A callback rewrites `kubernetes.core.*` onto them so roles are unchanged. On a non-local connection (or `become`, or an unsupported argument) they delegate to the genuine upstream `kubernetes.core` collection — a required dependency — so the task runs correctly via the real plugin (just not the fast path).

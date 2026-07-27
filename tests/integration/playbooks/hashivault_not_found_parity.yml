@@ -1,0 +1,46 @@
+---
+# Not-found parity harness, driven by test_integration.py::test_hashivault_read_not_found_parity.
+#
+# The runner invokes this twice:
+#   * stock -> AFLP_DISABLE=1 in the environment (kill-switch -> standard module)
+#   * fast  -> normal (fast in-process plugin)
+#
+# It dumps the result of reading a secret that does not exist, plus a successful
+# read used only as a validity probe (its fast-path marker proves which path the
+# run actually took — a *failed* result is never marked, on either path).
+#
+# This exists as its own harness rather than a parity.yml case because the shared
+# harness denylists `msg` as human-facing text; here the message is the contract.
+# Roles branch on stock's "is not in vault" wording to implement read-or-create,
+# so a fast path that reported hvac's raw InvalidPath text instead would turn
+# every first run into a hard failure.
+- name: "Parity harness — hashivault_read not-found"
+  hosts: local
+  gather_facts: false
+  vars:
+    result_out: "/tmp/aflp_hashivault_not_found.json"
+
+  tasks:
+    - name: Read a secret that does not exist
+      hashivault_read:
+        url: "{{ lookup('env', 'VAULT_ADDR') }}"
+        token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+        mount_point: secretv2
+        secret: parity/does-not-exist
+        version: 2
+      register: missing
+      ignore_errors: true
+
+    - name: Read a secret that does exist (path-validity probe)
+      hashivault_read:
+        url: "{{ lookup('env', 'VAULT_ADDR') }}"
+        token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+        mount_point: secretv2
+        secret: test-kv2
+        version: 2
+      register: probe
+
+    - name: Dump both results
+      copy:
+        content: "{{ {'missing': missing, 'probe': probe} | to_nice_json }}"
+        dest: "{{ result_out }}"

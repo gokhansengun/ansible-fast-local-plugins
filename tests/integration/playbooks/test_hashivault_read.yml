@@ -75,3 +75,110 @@
         that:
           - kv2_key.value == 'my-api-key-value'
           - kv2_key.rc == 0
+
+    # --- Missing secret: must report stock's "is not in vault" wording rather
+    #     than hvac's opaque InvalidPath text ('None, on get <url>'). Roles branch
+    #     on this message to implement read-or-create, so it is load-bearing.
+    - name: Read a KV v2 secret that does not exist
+      hashivault_read:
+        url: "{{ lookup('env', 'VAULT_ADDR') }}"
+        token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+        mount_point: secretv2
+        secret: does-not-exist
+        version: 2
+      register: kv2_missing
+      ignore_errors: true
+
+    - name: Assert missing KV v2 secret reports the stock message
+      assert:
+        that:
+          - kv2_missing.failed
+          - kv2_missing.rc == 1
+          - kv2_missing.msg == 'Secret secretv2/does-not-exist is not in vault'
+
+    - name: Read a KV v1 secret that does not exist
+      hashivault_read:
+        url: "{{ lookup('env', 'VAULT_ADDR') }}"
+        token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+        mount_point: kv1-test
+        secret: does-not-exist
+        version: 1
+      register: kv1_missing
+      ignore_errors: true
+
+    - name: Assert missing KV v1 secret reports the stock message
+      assert:
+        that:
+          - kv1_missing.failed
+          - kv1_missing.msg == 'Secret kv1-test/does-not-exist is not in vault'
+
+    # --- default: turns a missing secret into a successful read ---
+    - name: Read a missing secret with a default
+      hashivault_read:
+        url: "{{ lookup('env', 'VAULT_ADDR') }}"
+        token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+        mount_point: secretv2
+        secret: does-not-exist
+        version: 2
+        default: fallback-value
+      register: kv2_default
+
+    - name: Assert default is returned for a missing secret
+      assert:
+        that:
+          - not kv2_default.failed | default(false)
+          - kv2_default.value == 'fallback-value'
+          - kv2_default.rc == 0
+          - kv2_default['__produced_by_fast_plugin'] | default(false)
+
+    # --- Missing key: stock fails; it must not silently yield a null value ---
+    - name: Read a key that is not in the secret
+      hashivault_read:
+        url: "{{ lookup('env', 'VAULT_ADDR') }}"
+        token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+        mount_point: secretv2
+        secret: test-kv2
+        key: no-such-key
+        version: 2
+      register: kv2_missing_key
+      ignore_errors: true
+
+    - name: Assert a missing key fails with the stock message
+      assert:
+        that:
+          - kv2_missing_key.failed
+          - kv2_missing_key.rc == 1
+          - kv2_missing_key.msg == 'Key no-such-key is not in secret secretv2/test-kv2'
+
+    - name: Read a missing key with a default
+      hashivault_read:
+        url: "{{ lookup('env', 'VAULT_ADDR') }}"
+        token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+        mount_point: secretv2
+        secret: test-kv2
+        key: no-such-key
+        version: 2
+        default: fallback-value
+      register: kv2_missing_key_default
+
+    - name: Assert default is returned for a missing key
+      assert:
+        that:
+          - kv2_missing_key_default.value == 'fallback-value'
+
+    # --- A gated argument must delegate to the stock module, not be ignored ---
+    - name: Read with an argument the fast path does not implement
+      hashivault_read:
+        url: "{{ lookup('env', 'VAULT_ADDR') }}"
+        token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+        mount_point: secretv2
+        secret: test-kv2
+        version: 2
+        login_mount_point: token
+      register: kv2_gated
+
+    - name: Assert the gated read fell back to the stock module
+      assert:
+        that:
+          - kv2_gated.value.api_key == 'my-api-key-value'
+          - not kv2_gated['__produced_by_fast_plugin'] | default(false)
