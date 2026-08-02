@@ -368,3 +368,227 @@
         that:
           - not r_absent_def_idem.failed | default(false)
           - not r_absent_def_idem.changed
+
+    # ------------------------------------------------------------------ #
+    # state: present with a PARTIAL definition over a kubectl-applied     #
+    # resource.  `kubectl apply` would three-way-merge against            #
+    # last-applied-configuration and delete every omitted field (nulling  #
+    # spec.selector / containers, which the API server then rejects);     #
+    # state=present must PATCH, like kubernetes.core does.                #
+    # ------------------------------------------------------------------ #
+    - name: Write the Deployment manifest for the kubectl-apply pre-condition
+      copy:
+        dest: /tmp/aflp-partial-deploy.yml
+        content: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: aflp-partial-deploy
+            namespace: {{ ns }}
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: aflp-partial
+            template:
+              metadata:
+                labels:
+                  app: aflp-partial
+              spec:
+                containers:
+                  - name: pause
+                    image: registry.k8s.io/pause:3.9
+
+    - name: Create the Deployment with kubectl apply (records last-applied-configuration)
+      shell:
+        cmd: "kubectl --kubeconfig {{ kubeconfig }} apply -f /tmp/aflp-partial-deploy.yml"
+
+    - name: Add hostAliases with a partial definition (state=present)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: aflp-partial-deploy
+            namespace: "{{ ns }}"
+          spec:
+            template:
+              spec:
+                hostAliases:
+                  - ip: 10.0.0.1
+                    hostnames:
+                      - rancher.aflp.localdev
+      register: r_partial
+
+    - name: Read the Deployment back
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: aflp-partial-deploy
+        namespace: "{{ ns }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: r_partial_info
+
+    - name: Assert the partial definition merged and pruned nothing
+      vars:
+        spec: "{{ r_partial_info.resources[0].spec }}"
+      assert:
+        that:
+          - not r_partial.failed | default(false)
+          - r_partial.changed
+          - r_partial.method == 'update'
+          - spec.selector.matchLabels.app == 'aflp-partial'
+          - spec.template.spec.containers | length == 1
+          - spec.template.spec.hostAliases[0].ip == '10.0.0.1'
+
+    - name: Apply the same partial definition again (idempotency)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: aflp-partial-deploy
+            namespace: "{{ ns }}"
+          spec:
+            template:
+              spec:
+                hostAliases:
+                  - ip: 10.0.0.1
+                    hostnames:
+                      - rancher.aflp.localdev
+      register: r_partial_idem
+
+    - name: Assert the partial patch is idempotent
+      assert:
+        that:
+          - not r_partial_idem.failed | default(false)
+          - not r_partial_idem.changed
+
+    - name: Delete the partially patched Deployment
+      kubernetes.core.k8s:
+        state: absent
+        kind: Deployment
+        api_version: apps/v1
+        name: aflp-partial-deploy
+        namespace: "{{ ns }}"
+        kubeconfig: "{{ kubeconfig }}"
+
+    # ------------------------------------------------------------------ #
+    # state: patched on a missing resource — warn, never create           #
+    # ------------------------------------------------------------------ #
+    - name: Patch a ConfigMap that does not exist
+      kubernetes.core.k8s:
+        state: patched
+        kind: ConfigMap
+        api_version: v1
+        name: aflp-ghost-cm
+        namespace: "{{ ns }}"
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          metadata:
+            labels:
+              patched-by: aflp
+      register: r_patch_ghost
+
+    - name: Read back the ConfigMap that must not have been created
+      kubernetes.core.k8s_info:
+        kind: ConfigMap
+        name: aflp-ghost-cm
+        namespace: "{{ ns }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: r_patch_ghost_info
+
+    - name: Assert state=patched did not create the missing resource
+      assert:
+        that:
+          - not r_patch_ghost.failed | default(false)
+          - not r_patch_ghost.changed
+          - r_patch_ghost_info.resources | length == 0
+
+    # ------------------------------------------------------------------ #
+    # apply: true — still goes through `kubectl apply`                    #
+    # ------------------------------------------------------------------ #
+    - name: Create a ConfigMap with apply=true
+      kubernetes.core.k8s:
+        state: present
+        apply: true
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ cm_name }}-applied"
+            namespace: "{{ ns }}"
+          data:
+            key1: value1
+      register: r_apply
+
+    - name: Apply the same ConfigMap again with apply=true (idempotency)
+      kubernetes.core.k8s:
+        state: present
+        apply: true
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ cm_name }}-applied"
+            namespace: "{{ ns }}"
+          data:
+            key1: value1
+      register: r_apply_idem
+
+    - name: Assert apply=true creates then no-ops
+      assert:
+        that:
+          - not r_apply.failed | default(false)
+          - r_apply.changed
+          - not r_apply_idem.failed | default(false)
+          - not r_apply_idem.changed
+
+    # ------------------------------------------------------------------ #
+    # force: true — replace (PUT), not delete-and-recreate                #
+    # ------------------------------------------------------------------ #
+    - name: Replace the ConfigMap with force=true
+      kubernetes.core.k8s:
+        state: present
+        force: true
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ cm_name }}-applied"
+            namespace: "{{ ns }}"
+          data:
+            key2: value2
+      register: r_force
+
+    - name: Read the replaced ConfigMap back
+      kubernetes.core.k8s_info:
+        kind: ConfigMap
+        name: "{{ cm_name }}-applied"
+        namespace: "{{ ns }}"
+        kubeconfig: "{{ kubeconfig }}"
+      register: r_force_info
+
+    - name: Assert force replaced the whole resource
+      assert:
+        that:
+          - not r_force.failed | default(false)
+          - r_force.changed
+          - r_force.method == 'replace'
+          - r_force_info.resources[0].data.key2 == 'value2'
+          - r_force_info.resources[0].data.key1 is not defined
+
+    - name: Delete the ConfigMap used by the apply/force tests
+      kubernetes.core.k8s:
+        state: absent
+        kind: ConfigMap
+        name: "{{ cm_name }}-applied"
+        namespace: "{{ ns }}"
+        kubeconfig: "{{ kubeconfig }}"

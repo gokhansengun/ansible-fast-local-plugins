@@ -173,7 +173,7 @@ class TestKubectlDiff:
 # ------------------------------------------------------------------ #
 class TestKubectlApply:
     def _call(self, manifest_str='{}', src=None, **kwargs):
-        defaults = dict(server_side=False, field_manager=None, force=False,
+        defaults = dict(server_side=False, field_manager=None, force_conflicts=False,
                         kubeconfig=None, context=None, binary_path='kubectl')
         defaults.update(kwargs)
         return _mod._kubectl_apply(manifest_str=manifest_str, src=src, **defaults)
@@ -214,15 +214,17 @@ class TestKubectlApply:
 
     def test_force_conflicts_flag_for_server_side(self):
         with patch('subprocess.run', return_value=_proc(stdout='{}')) as mock_run:
-            self._call(server_side=True, force=True)
+            self._call(server_side=True, force_conflicts=True)
         cmd = mock_run.call_args[0][0]
         assert '--force-conflicts' in cmd
 
-    def test_force_flag_for_client_side(self):
+    def test_never_passes_client_side_force(self):
+        """kubectl apply --force deletes and recreates the resource; the task's
+        force argument means replace in kubernetes.core, so it never lands here."""
         with patch('subprocess.run', return_value=_proc(stdout='{}')) as mock_run:
-            self._call(server_side=False, force=True)
+            self._call(server_side=False)
         cmd = mock_run.call_args[0][0]
-        assert '--force' in cmd
+        assert '--force' not in cmd
 
     def test_uses_src_file(self):
         obj = _obj()
@@ -230,6 +232,151 @@ class TestKubectlApply:
             self._call(src='/path/cm.yaml')
         cmd = mock_run.call_args[0][0]
         assert '/path/cm.yaml' in cmd
+
+
+# ------------------------------------------------------------------ #
+# _kubectl_get                                                         #
+# ------------------------------------------------------------------ #
+class TestKubectlGet:
+    def _call(self, **kwargs):
+        defaults = dict(kind='ConfigMap', api_version='v1', name='my-cm',
+                        namespace='ns', kubeconfig=None, context=None,
+                        binary_path='kubectl')
+        defaults.update(kwargs)
+        return _mod._kubectl_get(**defaults)
+
+    def test_returns_parsed_object(self):
+        with patch('subprocess.run', return_value=_proc(stdout=json.dumps(_obj()))):
+            assert self._call()['kind'] == 'ConfigMap'
+
+    def test_returns_none_when_absent(self):
+        # --ignore-not-found exits 0 with empty stdout
+        with patch('subprocess.run', return_value=_proc(stdout='\n')):
+            assert self._call() is None
+
+    def test_nonzero_exit_raises(self):
+        with patch('subprocess.run', return_value=_proc(1, stderr='forbidden')):
+            with pytest.raises(RuntimeError, match='forbidden'):
+                self._call()
+
+    def test_subprocess_exception_raises(self):
+        with patch('subprocess.run', side_effect=OSError('no kubectl')):
+            with pytest.raises(RuntimeError, match='failed to run kubectl get'):
+                self._call()
+
+    def test_uses_ignore_not_found_and_namespace(self):
+        with patch('subprocess.run', return_value=_proc(stdout='')) as mock_run:
+            self._call()
+        cmd = mock_run.call_args[0][0]
+        assert '--ignore-not-found' in cmd
+        assert '--namespace' in cmd and 'ns' in cmd
+
+    def test_non_core_resource_type(self):
+        with patch('subprocess.run', return_value=_proc(stdout='')) as mock_run:
+            self._call(kind='Deployment', api_version='apps/v1', name='web')
+        assert 'deployment.apps' in mock_run.call_args[0][0]
+
+
+# ------------------------------------------------------------------ #
+# _kubectl_create / _kubectl_replace                                   #
+# ------------------------------------------------------------------ #
+class TestKubectlCreateReplace:
+    def _call(self, fn, manifest_str='{}', **kwargs):
+        defaults = dict(kubeconfig=None, context=None, binary_path='kubectl')
+        defaults.update(kwargs)
+        return fn(manifest_str=manifest_str, **defaults)
+
+    def test_create_verb_and_stdin(self):
+        manifest = json.dumps(_obj())
+        with patch('subprocess.run', return_value=_proc(stdout=manifest)) as mock_run:
+            result = self._call(_mod._kubectl_create, manifest)
+        cmd = mock_run.call_args[0][0]
+        assert cmd[:2] == ['kubectl', 'create']
+        assert mock_run.call_args[1]['input'] == manifest
+        assert result['kind'] == 'ConfigMap'
+
+    def test_replace_verb(self):
+        with patch('subprocess.run', return_value=_proc(stdout='{}')) as mock_run:
+            self._call(_mod._kubectl_replace)
+        assert mock_run.call_args[0][0][:2] == ['kubectl', 'replace']
+
+    def test_nonzero_exit_raises(self):
+        with patch('subprocess.run', return_value=_proc(1, stderr='already exists')):
+            with pytest.raises(RuntimeError, match='already exists'):
+                self._call(_mod._kubectl_create)
+
+    def test_subprocess_exception_raises(self):
+        with patch('subprocess.run', side_effect=OSError('no kubectl')):
+            with pytest.raises(RuntimeError, match='failed to run kubectl create'):
+                self._call(_mod._kubectl_create)
+
+
+# ------------------------------------------------------------------ #
+# _merge_types / _objects_match / _resolve_objects                     #
+# ------------------------------------------------------------------ #
+class TestMergeTypes:
+    def test_default_order_matches_genuine(self):
+        assert _mod._merge_types(None) == ['strategic-merge', 'merge']
+
+    def test_explicit_list_is_kept(self):
+        assert _mod._merge_types(['merge']) == ['merge']
+
+    def test_bare_string_is_comma_split(self):
+        assert _mod._merge_types('json,merge') == ['json', 'merge']
+
+
+class TestObjectsMatch:
+    def test_identical_objects_match(self):
+        assert _mod._objects_match(_obj(), _obj()) is True
+
+    def test_resource_version_only_diff_matches(self):
+        before, after = _obj(), _obj()
+        before['metadata']['resourceVersion'] = '1'
+        after['metadata']['resourceVersion'] = '2'
+        after['metadata']['generation'] = 3
+        assert _mod._objects_match(before, after) is True
+
+    def test_real_diff_does_not_match(self):
+        before, after = _obj(), _obj()
+        after['data'] = {'k': 'v'}
+        assert _mod._objects_match(before, after) is False
+
+
+class TestResolveObjects:
+    def test_arguments_fill_gaps_in_definition(self):
+        objs = _mod._resolve_objects({'spec': {'replicas': 2}}, None, 'Deployment',
+                                     'apps/v1', 'web', 'ns')
+        assert objs == [{'spec': {'replicas': 2}, 'apiVersion': 'apps/v1',
+                         'kind': 'Deployment',
+                         'metadata': {'name': 'web', 'namespace': 'ns'}}]
+
+    def test_definition_wins_over_arguments(self):
+        objs = _mod._resolve_objects({'kind': 'ConfigMap', 'metadata': {'name': 'a'}},
+                                     None, 'Deployment', 'apps/v1', 'b', 'ns')
+        assert objs[0]['kind'] == 'ConfigMap'
+        assert objs[0]['metadata']['name'] == 'a'
+
+    def test_multidoc_yields_every_object(self):
+        objs = _mod._resolve_objects(_load_template('rbac_multidoc.yml'), None,
+                                     None, 'v1', None, None)
+        assert [o['kind'] for o in objs] == ['ServiceAccount', 'ClusterRole',
+                                             'ClusterRoleBinding']
+
+    def test_plain_list_definition_yields_every_object(self):
+        objs = _mod._resolve_objects([_obj('a'), _obj('b')], None, None, 'v1',
+                                     None, None)
+        assert [o['metadata']['name'] for o in objs] == ['a', 'b']
+
+    def test_no_definition_builds_manifest_from_arguments(self):
+        objs = _mod._resolve_objects(None, None, 'ConfigMap', 'v1', 'cm', 'ns')
+        assert objs == [{'apiVersion': 'v1', 'kind': 'ConfigMap',
+                         'metadata': {'name': 'cm', 'namespace': 'ns'}}]
+
+    def test_src_file_is_read(self, tmp_path):
+        src = tmp_path / 'cm.yml'
+        src.write_text('apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: from-src\n')
+        objs = _mod._resolve_objects(None, str(src), None, 'v1', None, 'ns')
+        assert objs[0]['metadata'] == {'name': 'from-src', 'namespace': 'ns'}
 
 
 # ------------------------------------------------------------------ #
@@ -367,36 +514,119 @@ class TestKubectlPatch:
 # ActionModule – state: present                                        #
 # ------------------------------------------------------------------ #
 class TestK8sFastPathPresent:
-    def _apply_result(self, obj=None):
+    """state=present without apply=true is create-or-patch, never `kubectl apply`.
+
+    kubernetes.core defaults apply to false, i.e. an existing resource is
+    PATCHed with exactly the fields the manifest carries.  `kubectl apply`
+    instead three-way-merges against last-applied-configuration and *deletes*
+    every field the manifest omits.
+    """
+
+    def _absent(self):
+        return _proc(stdout='')            # kubectl get --ignore-not-found
+
+    def _live(self, obj=None):
         return _proc(stdout=json.dumps(obj or _obj()))
 
-    def test_creates_resource_when_diff_shows_changes(self):
+    def test_creates_resource_when_absent(self):
         action = _action({'kind': 'ConfigMap', 'name': 'cm', 'namespace': 'default',
                           'definition': _obj()})
-        with patch('subprocess.run', side_effect=[_proc(1), self._apply_result()]):
+        with patch('subprocess.run', side_effect=[self._absent(), self._live()]) as mock_run:
             result = action.run(task_vars={})
         assert not result.get('failed'), result
         assert result['changed'] is True
+        assert result['method'] == 'create'
+        assert mock_run.call_args_list[1][0][0][:2] == ['kubectl', 'create']
 
-    def test_noop_when_diff_shows_no_changes(self):
+    def test_patches_resource_when_it_exists(self):
+        live = _obj()
+        patched = _obj()
+        patched['data'] = {'key': 'value'}
+        action = _action({'definition': patched})
+        with patch('subprocess.run',
+                   side_effect=[self._live(live), self._live(patched)]) as mock_run:
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is True
+        assert result['method'] == 'update'
+        assert mock_run.call_args_list[1][0][0][:2] == ['kubectl', 'patch']
+
+    def test_never_calls_kubectl_apply_without_apply_true(self):
+        """The regression: a partial definition applied over a resource that was
+        created with `kubectl apply` used to null out every omitted field."""
+        partial = {'apiVersion': 'apps/v1', 'kind': 'Deployment',
+                   'metadata': {'name': 'cattle-cluster-agent', 'namespace': 'cattle-system'},
+                   'spec': {'template': {'spec': {'hostAliases': [{'ip': '1.2.3.4'}]}}}}
+        live = {'apiVersion': 'apps/v1', 'kind': 'Deployment',
+                'metadata': {'name': 'cattle-cluster-agent', 'namespace': 'cattle-system'},
+                'spec': {'selector': {'matchLabels': {'app': 'cattle'}}}}
+        action = _action({'state': 'present', 'definition': partial})
+        with patch('subprocess.run',
+                   side_effect=[self._live(live), self._live(live)]) as mock_run:
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        verbs = [call[0][0][1] for call in mock_run.call_args_list]
+        assert verbs == ['get', 'patch']
+        assert 'apply' not in verbs
+        # the patch body carries only what the manifest asked for
+        patch_cmd = mock_run.call_args_list[1][0][0]
+        body = json.loads(patch_cmd[patch_cmd.index('--patch') + 1])
+        assert body['spec'] == {'template': {'spec': {'hostAliases': [{'ip': '1.2.3.4'}]}}}
+
+    def test_noop_when_patch_changes_nothing(self):
+        live = _obj()
         action = _action({'kind': 'ConfigMap', 'name': 'cm', 'namespace': 'default',
                           'definition': _obj()})
-        with patch('subprocess.run', return_value=_proc(0)):
+        with patch('subprocess.run', side_effect=[self._live(live), self._live(live)]):
             result = action.run(task_vars={})
         assert not result.get('failed'), result
         assert result['changed'] is False
 
+    def test_resource_version_only_change_is_not_a_change(self):
+        live, after = _obj(), _obj()
+        live['metadata']['resourceVersion'] = '11'
+        after['metadata']['resourceVersion'] = '12'
+        action = _action({'definition': _obj()})
+        with patch('subprocess.run', side_effect=[self._live(live), self._live(after)]):
+            result = action.run(task_vars={})
+        assert result['changed'] is False
+
+    def test_falls_back_to_next_merge_type(self):
+        """strategic-merge is rejected for CRDs; genuine retries with merge."""
+        live = _obj()
+        action = _action({'definition': _obj()})
+        side = [self._live(live),
+                _proc(1, stderr='unable to find api field in struct'),
+                self._live(live)]
+        with patch('subprocess.run', side_effect=side) as mock_run:
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        types = [c[0][0][c[0][0].index('--type') + 1]
+                 for c in mock_run.call_args_list[1:]]
+        assert types == ['strategic', 'merge']
+
+    def test_force_replaces_instead_of_patching(self):
+        live = _obj()
+        action = _action({'definition': _obj(), 'force': True})
+        with patch('subprocess.run',
+                   side_effect=[self._live(live), self._live(live)]) as mock_run:
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['method'] == 'replace'
+        assert mock_run.call_args_list[1][0][0][:2] == ['kubectl', 'replace']
+
     def test_fast_path_sets_marker(self):
         action = _action({'kind': 'ConfigMap', 'name': 'cm', 'namespace': 'default',
                           'definition': _obj()})
-        with patch('subprocess.run', side_effect=[_proc(1), self._apply_result()]):
+        with patch('subprocess.run', side_effect=[self._absent(), self._live()]):
             result = action.run(task_vars={})
         assert result[FAST_PLUGIN_MARKER] is True
 
     def test_noop_result_is_marked(self):
+        live = _obj()
         action = _action({'kind': 'ConfigMap', 'name': 'cm', 'namespace': 'default',
                           'definition': _obj()})
-        with patch('subprocess.run', return_value=_proc(0)):
+        with patch('subprocess.run', side_effect=[self._live(live), self._live(live)]):
             result = action.run(task_vars={})
         assert result['changed'] is False
         assert result[FAST_PLUGIN_MARKER] is True
@@ -407,14 +637,12 @@ class TestK8sFastPathPresent:
         assert result['failed'] is True
         assert FAST_PLUGIN_MARKER not in result
 
-    def test_applies_when_diff_fails(self):
-        """A diff error (rc=2, permission denied etc.) should not abort — assume changes."""
-        action = _action({'kind': 'ConfigMap', 'name': 'cm', 'namespace': 'default',
-                          'definition': _obj()})
-        with patch('subprocess.run', side_effect=[_proc(2, stderr='forbidden'),
-                                                   self._apply_result()]):
+    def test_get_failure_returns_failed(self):
+        action = _action({'definition': _obj()})
+        with patch('subprocess.run', return_value=_proc(1, stderr='forbidden')):
             result = action.run(task_vars={})
-        assert result['changed'] is True
+        assert result['failed'] is True
+        assert 'forbidden' in result['msg']
 
     def test_missing_definition_src_and_kind_returns_failed(self):
         action = _action({'namespace': 'default'})
@@ -432,29 +660,22 @@ class TestK8sFastPathPresent:
         """definition is a multi-document YAML string (3 objects separated by ---).
 
         lookup('template', 'rbac.yml.j2') can render a file that contains
-        multiple k8s objects in a single stream.  All 3 must reach kubectl,
+        multiple k8s objects in a single stream.  All 3 must be reconciled,
         not just the first document.
         """
         action = _action({'state': 'present',
                           'definition': _load_template('rbac_multidoc.yml')})
-        applied = [
-            {'apiVersion': 'v1', 'kind': 'ServiceAccount',
-             'metadata': {'name': 'registry-creds'}},
-            {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'ClusterRole',
-             'metadata': {'name': 'registry-creds-reader'}},
-            {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'ClusterRoleBinding',
-             'metadata': {'name': 'registry-creds-binding'}},
-        ]
-        with patch('subprocess.run', side_effect=[_proc(1),
-                                                   _proc(stdout=json.dumps(applied))]) as mock_run:
+        # get(absent) + create, three times over
+        side = [self._absent(), _proc(stdout='{}')] * 3
+        with patch('subprocess.run', side_effect=side) as mock_run:
             result = action.run(task_vars={})
         assert not result.get('failed'), result
         assert result['changed'] is True
-        # All 3 objects must have been sent to kubectl as a List, not just the first.
-        diff_input = mock_run.call_args_list[0][1]['input']
-        manifest = json.loads(diff_input)
-        assert manifest['kind'] == 'List', 'expected a k8s List sent to kubectl for multi-doc YAML'
-        assert len(manifest['items']) == 3
+        created = [json.loads(c[1]['input'])['kind']
+                   for c in mock_run.call_args_list if c[0][0][1] == 'create']
+        assert created == ['ServiceAccount', 'ClusterRole', 'ClusterRoleBinding']
+        # several objects -> genuine's aggregated results shape
+        assert len(result['result']['results']) == 3
 
     def test_definition_as_yaml_string_from_template_lookup(self):
         """definition passed as a YAML string (as returned by lookup('template', ...))."""
@@ -470,16 +691,81 @@ class TestK8sFastPathPresent:
             '  verbs: ["get", "list"]\n'
         )
         action = _action({'state': 'present', 'definition': yaml_str})
-        applied = {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'ClusterRole',
+        created = {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'ClusterRole',
                    'metadata': {'name': 'registry-creds-reader'}}
-        with patch('subprocess.run', side_effect=[_proc(1),
-                                                   _proc(stdout=json.dumps(applied))]):
+        with patch('subprocess.run',
+                   side_effect=[self._absent(), _proc(stdout=json.dumps(created))]):
             result = action.run(task_vars={})
         assert not result.get('failed'), result
         assert result['changed'] is True
 
-    def test_apply_failure_returns_failed(self):
+    def test_create_failure_returns_failed(self):
         action = _action({'definition': _obj()})
+        with patch('subprocess.run',
+                   side_effect=[self._absent(), _proc(1, stderr='server error')]):
+            result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert 'server error' in result['msg']
+
+    def test_uses_src_file(self, tmp_path):
+        src = tmp_path / 'cm.yaml'
+        src.write_text('apiVersion: v1\nkind: ConfigMap\nmetadata:\n'
+                       '  name: from-src\n  namespace: ns\n')
+        action = _action({'src': str(src)})
+        with patch('subprocess.run', side_effect=[self._absent(), _proc(stdout='{}')]) as mock_run:
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is True
+        assert json.loads(mock_run.call_args_list[1][1]['input'])['metadata']['name'] == 'from-src'
+
+    def test_unreadable_src_returns_failed(self):
+        action = _action({'src': '/manifests/does-not-exist.yaml'})
+        result = action.run(task_vars={})
+        assert result['failed'] is True
+        assert 'failed to read src' in result['msg']
+
+    def test_minimal_manifest_built_from_kind_name(self):
+        action = _action({'kind': 'ConfigMap', 'name': 'minimal', 'namespace': 'ns',
+                          'api_version': 'v1'})
+        with patch('subprocess.run', side_effect=[self._absent(), _proc(stdout='{}')]) as mock_run:
+            action.run(task_vars={})
+        manifest = json.loads(mock_run.call_args_list[1][1]['input'])
+        assert manifest['kind'] == 'ConfigMap'
+        assert manifest['metadata']['name'] == 'minimal'
+
+
+# ------------------------------------------------------------------ #
+# ActionModule – apply: true                                           #
+# ------------------------------------------------------------------ #
+class TestK8sFastPathApply:
+    def _apply_result(self, obj=None):
+        return _proc(stdout=json.dumps(obj or _obj()))
+
+    def test_apply_true_uses_kubectl_apply(self):
+        action = _action({'definition': _obj(), 'apply': True})
+        with patch('subprocess.run', side_effect=[_proc(1), self._apply_result()]) as mock_run:
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is True
+        assert [c[0][0][1] for c in mock_run.call_args_list] == ['diff', 'apply']
+
+    def test_noop_when_diff_shows_no_changes(self):
+        action = _action({'definition': _obj(), 'apply': True})
+        with patch('subprocess.run', return_value=_proc(0)):
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is False
+
+    def test_applies_when_diff_fails(self):
+        """A diff error (rc=2, permission denied etc.) should not abort — assume changes."""
+        action = _action({'definition': _obj(), 'apply': True})
+        with patch('subprocess.run', side_effect=[_proc(2, stderr='forbidden'),
+                                                   self._apply_result()]):
+            result = action.run(task_vars={})
+        assert result['changed'] is True
+
+    def test_apply_failure_returns_failed(self):
+        action = _action({'definition': _obj(), 'apply': True})
         with patch('subprocess.run', side_effect=[_proc(1),
                                                    _proc(1, stderr='server error')]):
             result = action.run(task_vars={})
@@ -487,33 +773,24 @@ class TestK8sFastPathPresent:
         assert 'server error' in result['msg']
 
     def test_uses_src_file(self):
-        action = _action({'src': '/manifests/cm.yaml'})
+        action = _action({'src': '/manifests/cm.yaml', 'apply': True})
         with patch('subprocess.run', side_effect=[_proc(1), self._apply_result()]) as mock_run:
             result = action.run(task_vars={})
         assert result['changed'] is True
-        # both diff and apply calls should use the src path
+        # both diff and apply calls should use the src path (no local read needed)
         for call in mock_run.call_args_list:
-            cmd = call[0][0]
-            assert '/manifests/cm.yaml' in cmd
+            assert '/manifests/cm.yaml' in call[0][0]
 
-    def test_minimal_manifest_built_from_kind_name(self):
-        action = _action({'kind': 'ConfigMap', 'name': 'minimal', 'namespace': 'ns',
-                          'api_version': 'v1'})
-        with patch('subprocess.run', side_effect=[_proc(1), self._apply_result()]) as mock_run:
-            action.run(task_vars={})
-        diff_input = mock_run.call_args_list[0][1]['input']
-        manifest = json.loads(diff_input)
-        assert manifest['kind'] == 'ConfigMap'
-        assert manifest['metadata']['name'] == 'minimal'
-
-    def test_server_side_apply_flag_forwarded(self):
-        action = _action({'definition': _obj(),
-                          'server_side_apply': {'field_manager': 'my-ctrl'}})
+    def test_server_side_apply_flags_forwarded(self):
+        action = _action({'definition': _obj(), 'apply': True,
+                          'server_side_apply': {'field_manager': 'my-ctrl',
+                                                'force_conflicts': True}})
         with patch('subprocess.run', side_effect=[_proc(1), self._apply_result()]) as mock_run:
             action.run(task_vars={})
         apply_cmd = mock_run.call_args_list[1][0][0]
         assert '--server-side' in apply_cmd
         assert '--field-manager' in apply_cmd
+        assert '--force-conflicts' in apply_cmd
 
 
 # ------------------------------------------------------------------ #
@@ -548,17 +825,19 @@ class TestK8sUnsupportedArgs:
 
 
 class TestK8sFastPathLatest:
-    def test_noop_when_no_diff(self):
+    def test_noop_when_patch_changes_nothing(self):
         """state=latest is idempotent like state=present."""
+        live = _proc(stdout=json.dumps(_obj()))
         action = _action({'state': 'latest', 'definition': _obj()})
-        with patch('subprocess.run', return_value=_proc(0)):
+        with patch('subprocess.run', side_effect=[live, live]):
             result = action.run(task_vars={})
         assert not result.get('failed'), result
         assert result['changed'] is False
 
-    def test_applies_when_diff_shows_changes(self):
+    def test_creates_when_absent(self):
         action = _action({'state': 'latest', 'definition': _obj()})
-        with patch('subprocess.run', side_effect=[_proc(1), _proc(stdout=json.dumps(_obj()))]):
+        with patch('subprocess.run', side_effect=[_proc(stdout=''),
+                                                   _proc(stdout=json.dumps(_obj()))]):
             result = action.run(task_vars={})
         assert result['changed'] is True
 
@@ -669,14 +948,31 @@ class TestK8sFastPathAbsent:
 # ------------------------------------------------------------------ #
 class TestK8sFastPathPatched:
     def test_patches_resource(self):
-        obj = _obj()
+        live = _obj()
+        patched = _obj()
+        patched['metadata']['labels'] = {'env': 'test'}
         action = _action({'state': 'patched', 'kind': 'ConfigMap',
                           'name': 'my-cm', 'namespace': 'default',
                           'definition': {'metadata': {'labels': {'env': 'test'}}}})
-        with patch('subprocess.run', return_value=_proc(stdout=json.dumps(obj))):
+        with patch('subprocess.run',
+                   side_effect=[_proc(stdout=json.dumps(live)),
+                                _proc(stdout=json.dumps(patched))]) as mock_run:
             result = action.run(task_vars={})
         assert not result.get('failed'), result
         assert result['changed'] is True
+        assert [c[0][0][1] for c in mock_run.call_args_list] == ['get', 'patch']
+
+    def test_missing_resource_is_not_created(self):
+        """Genuine warns and leaves the cluster alone rather than creating."""
+        action = _action({'state': 'patched', 'kind': 'ConfigMap', 'name': 'ghost',
+                          'namespace': 'default',
+                          'definition': {'metadata': {'labels': {'env': 'test'}}}})
+        with patch('subprocess.run', return_value=_proc(stdout='')) as mock_run:
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result['changed'] is False
+        assert mock_run.call_count == 1                      # get only, no create
+        assert 'patched' in result['warnings'][0]
 
     def test_missing_kind_returns_failed(self):
         action = _action({'state': 'patched', 'name': 'cm',
@@ -699,19 +995,23 @@ class TestK8sFastPathPatched:
         assert 'definition' in result['msg']
 
     def test_patch_failure_returns_failed(self):
+        """Every merge_type is tried; the last error surfaces."""
         action = _action({'state': 'patched', 'kind': 'ConfigMap', 'name': 'cm',
                           'definition': {'metadata': {'labels': {'x': 'y'}}}})
-        with patch('subprocess.run', return_value=_proc(1, stderr='not found')):
+        side = [_proc(stdout=json.dumps(_obj())),
+                _proc(1, stderr='strategic unsupported'),
+                _proc(1, stderr='patch rejected')]
+        with patch('subprocess.run', side_effect=side):
             result = action.run(task_vars={})
         assert result['failed'] is True
-        assert 'not found' in result['msg']
+        assert 'patch rejected' in result['msg']
 
     def test_merge_type_forwarded(self):
-        obj = _obj()
+        obj = _proc(stdout=json.dumps(_obj()))
         action = _action({'state': 'patched', 'kind': 'ConfigMap', 'name': 'cm',
                           'definition': {'metadata': {}},
                           'merge_type': 'json'})
-        with patch('subprocess.run', return_value=_proc(stdout=json.dumps(obj))) as mock_run:
+        with patch('subprocess.run', side_effect=[obj, obj]) as mock_run:
             action.run(task_vars={})
         cmd = mock_run.call_args[0][0]
         idx = cmd.index('--type')
@@ -764,11 +1064,15 @@ class TestK8sFallback:
             action.run(task_vars={})
         mock.assert_called_once()
 
-    def test_delegates_when_apply_false(self):
+    def test_apply_false_stays_on_the_fast_path(self):
+        """apply=false is the kubernetes.core default (create-or-patch); the fast
+        path implements it, so there is nothing to delegate."""
         action = _action({'definition': _obj(), 'apply': False})
-        with mock_collection_run(FQCN, {'changed': True, 'result': {}}) as mock:
-            action.run(task_vars={})
-        mock.assert_called_once()
+        with patch('subprocess.run',
+                   side_effect=[_proc(stdout=''), _proc(stdout=json.dumps(_obj()))]):
+            result = action.run(task_vars={})
+        assert not result.get('failed'), result
+        assert result[FAST_PLUGIN_MARKER] is True
 
     def test_fallback_result_is_unmarked(self):
         action = _action({'definition': _obj()}, local=False)
@@ -786,8 +1090,8 @@ class TestK8sFallback:
 class TestK8sGenuineMissing:
     """The overrides now live in aflp.kubernetes_core and delegate to the genuine
     kubernetes.core collection for non-local / become tasks and for unsupported
-    args (wait/template/apply=false). When that collection is absent, those paths
-    fail with an actionable message rather than running or recursing."""
+    args (wait/template). When that collection is absent, those paths fail with
+    an actionable message rather than running or recursing."""
 
     def test_non_local_without_genuine_fails(self, monkeypatch):
         mod = _load_plugin('k8s', plugin_dir=PLUGIN_DIR)
@@ -804,11 +1108,3 @@ class TestK8sGenuineMissing:
         result = action.run(task_vars={})
         assert result['failed'] is True
         assert 'wait' in result['msg']
-
-    def test_apply_false_without_genuine_fails(self, monkeypatch):
-        mod = _load_plugin('k8s', plugin_dir=PLUGIN_DIR)
-        monkeypatch.setattr(mod, '_load_standard_action', lambda: None)
-        action = _action({'definition': _obj(), 'apply': False})
-        result = action.run(task_vars={})
-        assert result['failed'] is True
-        assert 'apply=false' in result['msg']

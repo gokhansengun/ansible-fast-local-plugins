@@ -21,5 +21,5 @@ Provided overrides:
 - `helm_repository` — `helm repo add`
 - `helm_pull` — `helm pull`
 - `helm_info` — `helm status` / `helm get values`
-- `k8s` — `kubectl apply`/`delete`
+- `k8s` — `kubectl get`/`create`/`patch`/`replace`/`delete` (`apply` only for `apply: true`)
 - `k8s_info` — `kubectl get`
