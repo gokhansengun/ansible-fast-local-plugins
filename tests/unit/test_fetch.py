@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import sys
+import tracemalloc
 from unittest.mock import patch
 
 import pytest
@@ -11,7 +13,9 @@ sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), '../../ansible/plugins/action_plugins')
 ))
 
-from tests.conftest import FAST_PLUGIN_MARKER, make_action, mock_builtin_run
+from ansible.module_utils.common.text.converters import to_bytes
+
+from tests.conftest import FAST_PLUGIN_MARKER, _load_plugin, make_action, mock_builtin_run
 
 
 def _sha1(data):
@@ -126,3 +130,63 @@ class TestFetchFallback:
         with mock_builtin_run('fetch', {'changed': True}) as mock_run:
             action.run(task_vars={})
         mock_run.assert_called_once()
+
+
+class TestFetchStreaming:
+    """The copy must stream; buffering the whole file OOM-kills the controller.
+
+    fetch used to read the source into a bytes object and write it back out, so
+    peak RSS tracked the file size - fatal on the multi-GB database dumps this
+    plugin is actually used to pull.
+    """
+
+    def test_copy_uses_shutil_copyfile(self, tmp_path):
+        mod = _load_plugin('fetch')
+        src = tmp_path / 'src.bin'
+        src.write_bytes(b'payload' * 1000)
+        dest = tmp_path / 'out.bin'
+        action = make_action('fetch', {'src': str(src), 'dest': str(dest), 'flat': True})
+
+        with patch.object(mod, 'shutil') as mock_shutil:
+            mock_shutil.copyfile.side_effect = shutil.copyfile
+            result = action.run(task_vars={})
+
+        mock_shutil.copyfile.assert_called_once_with(
+            to_bytes(str(src)), to_bytes(str(dest)))
+        assert result['changed'] is True
+        assert dest.read_bytes() == src.read_bytes()
+        assert result[FAST_PLUGIN_MARKER] is True
+
+    def test_peak_memory_does_not_track_file_size(self, tmp_path):
+        size = 16 * 1024 * 1024
+        src = tmp_path / 'big.bin'
+        src.write_bytes(b'\xab' * size)
+        dest = tmp_path / 'big.out'
+        action = make_action('fetch', {'src': str(src), 'dest': str(dest), 'flat': True})
+
+        tracemalloc.start()
+        try:
+            result = action.run(task_vars={})
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        assert result['changed'] is True
+        assert result['checksum'] == result['remote_checksum']
+        assert dest.stat().st_size == size
+        # The buffering implementation peaked at >= the 16 MiB file; streaming
+        # holds a 64 KiB block at most (and nothing at all via os.sendfile).
+        assert peak < size // 4, 'fetch buffered %d bytes for a %d byte file' % (peak, size)
+
+    def test_large_file_is_byte_exact(self, tmp_path):
+        payload = os.urandom(3 * 1024 * 1024 + 7)  # not a multiple of any copy block size
+        src = tmp_path / 'big.bin'
+        src.write_bytes(payload)
+        dest = tmp_path / 'big.out'
+        action = make_action('fetch', {'src': str(src), 'dest': str(dest), 'flat': True})
+
+        result = action.run(task_vars={})
+
+        assert result['changed'] is True
+        assert result['checksum'] == _sha1(payload)
+        assert dest.read_bytes() == payload

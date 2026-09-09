@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 
 from ansible.module_utils.common.text.converters import to_bytes
@@ -18,7 +19,7 @@ from _action_utils import _is_local, _load_builtin_action, mark_fast_result, str
 
 display = Display()
 
-FAST_FETCH_VERSION = '1.0'
+FAST_FETCH_VERSION = '1.1'
 
 
 class ActionModule(ActionBase):
@@ -96,8 +97,6 @@ class ActionModule(ActionBase):
             return result
 
         remote_checksum = checksum(source)
-        with open(to_bytes(source), 'rb') as f:
-            remote_data = f.read()
 
         # Calculate the destination path exactly as the standard fetch does.
         if flat:
@@ -121,8 +120,9 @@ class ActionModule(ActionBase):
         if remote_checksum != local_checksum:
             makedirs_safe(os.path.dirname(dest))
             try:
-                with open(to_bytes(dest), 'wb') as f:
-                    f.write(remote_data)
+                # Stream the copy: reading the whole file first costs RSS equal to its
+                # size, which OOM-kills the controller on multi-GB database dumps.
+                shutil.copyfile(to_bytes(source), to_bytes(dest))
             except OSError as e:
                 return dict(failed=True, msg='Failed to fetch the file: %s' % e)
             new_checksum = checksum(dest)
