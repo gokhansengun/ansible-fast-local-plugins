@@ -94,7 +94,7 @@ When adding a sixth override: drop `<name>.py` in the collection's `action/` dir
 
 ### Fast-path summary callback (`aflp_fast_path_summary`)
 
-`ansible/plugins/callback_plugins/aflp_fast_path_summary.py` tallies, per action, fast (in-process) vs fallback (stock) results — classified by the `__produced_by_fast_plugin` marker — and prints a table at `v2_playbook_on_stats`. It exists to surface *silent* fallbacks (a task that should be fast but hit become / non-local / an unsupported arg). Unlike the redirect callback it is **opt-in** (`CALLBACK_NEEDS_ENABLED = True`), enabled via `callbacks_enabled = aflp_fast_path_summary` in `ansible.cfg` — the convention for informational callbacks (profile_tasks/timer). It discovers which actions to report the same way the redirect callback does (sibling `action_plugins` dir + config paths), counts loop results per item (skipped items excluded), ignores failures/skips (the marker is absent on failures regardless of path), and is fail-open.
+`ansible/plugins/callback_plugins/aflp_fast_path_summary.py` tallies, per action, fast (in-process) vs fallback (stock) results — classified by the `__produced_by_fast_plugin` marker — and prints a table at `v2_playbook_on_stats`. It exists to surface *silent* fallbacks (a task that should be fast but hit become / non-local / an unsupported arg). Unlike the redirect callback it is **opt-in** (`CALLBACK_NEEDS_ENABLED = True`), enabled via `callbacks_enabled = aflp_fast_path_summary` in `ansible.cfg` — the convention for informational callbacks (profile_tasks/timer). It discovers which actions to report the same way the redirect callback does (sibling `action_plugins` dir + config paths), ignores failures/skips (the marker is absent on failures regardless of path), and is fail-open. Loop items are counted from **`v2_runner_item_on_ok`**, which ansible fires only for items that actually ran; the aggregated `v2_runner_on_ok` of a looped task (any result carrying a `results` list) is deliberately ignored so items are never double-counted. It used to walk the aggregated `results` list and drop entries with `skipped: True`, but ansible-core 2.21 rewrote results around `UnifiedTaskResult` and declares `skipped` with `Destination.NOT_CALLBACK`, so per-item dicts handed to callbacks no longer carry the flag (only `skip_reason`/`false_condition`) — every item skipped by a per-item `when:` was then tallied as an unmarked *fallback* (a jenkins role showed `template fast=116 fallback=154` where the 154 were skipped loop items). The item hook makes the exclusion structural instead of shape-dependent; `test_fast_path_summary.yml` keeps a looped `template` with per-item skips and asserts `fast=2 fallback=0`.
 
 > Gotcha: because this callback is *enabled*, ansible parses its `DOCUMENTATION` block as YAML at load. A bare `: ` (colon-space) inside prose there aborts the **whole run** with a YAML scan error pointing at a `<unicode string>` — not at your playbook. Keep colons out of description/notes text (the redirect callback, being auto-loaded but never doc-parsed the same way, was less sensitive). The fast-path tests catch this.
 
@@ -138,7 +138,7 @@ make test-int   # or: make test  (unit + integration)
 Defined at the top of `Makefile`:
 
 ```makefile
-MATRIX := 3.14:2.20.5:5.6.0  3.12:2.19.3:5.4.0
+MATRIX := 3.14:2.21.1:5.6.0 3.14:2.20.5:5.6.0 3.12:2.19.3:5.4.0
 #          ^Python  ^ansible-core  ^ansible-modules-hashivault
 ```
 

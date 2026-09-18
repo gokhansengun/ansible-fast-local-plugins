@@ -1,7 +1,8 @@
 ---
-# Exercises the aflp_fast_path_summary callback: a handful of fast-path tasks
-# plus one task forced down the fallback (lineinfile with a file-attr arg, which
-# the fast plugin delegates to the stock module). The test wrapper greps the
+# Exercises the aflp_fast_path_summary callback: a handful of fast-path tasks,
+# a looped template task whose per-item `when` skips half the items, plus one
+# task forced down the fallback (lineinfile with a file-attr arg, which the fast
+# plugin delegates to the stock module). The test wrapper greps the
 # play's stdout for the summary table the callback prints at the end.
 - name: Drive the fast-path summary callback
   hosts: local
@@ -28,6 +29,29 @@
       lineinfile:
         path: "{{ work_dir }}/f"
         line: "two"
+
+    # Looped task with a per-item condition. Ansible-core 2.21 stopped exposing
+    # the `skipped` flag on per-item callback dicts, so a callback that parses the
+    # aggregated `results` list counts every skipped item as an unmarked fallback.
+    # The wrapper asserts the template row shows exactly the two rendered items
+    # and zero fallbacks.
+    - name: "Render some items, skip the rest (fast template loop)"
+      template:
+        src: "{{ playbook_dir }}/../templates/greeting.j2"
+        dest: "{{ work_dir }}/greeting-{{ item }}.txt"
+      vars:
+        recipient: "{{ item }}"
+      with_items: [alpha, beta, gamma, delta]
+      when: item in ['alpha', 'gamma']
+
+    - name: "Loop where every item is skipped (template, must add nothing)"
+      template:
+        src: "{{ playbook_dir }}/../templates/greeting.j2"
+        dest: "{{ work_dir }}/never-{{ item }}.txt"
+      vars:
+        recipient: "{{ item }}"
+      with_items: [x, y]
+      when: false
 
     - name: "Append a line with mode (lineinfile forced fallback)"
       lineinfile:

@@ -224,7 +224,7 @@ get_url      19.729s    2.265s       8.7x
 TOTAL       183.987s   15.762s      11.7x
 ```
 
-> Each pair uses its own controller image — the default is the first `MATRIX` entry (`3.14:2.20.5:5.6.0`); select another with `PAIR`, e.g. `make bench PAIR=3.12:2.19.3:5.4.0`. Because the controller image builds to a single shared tag, switch pairs with `make build MATRIX='<pair>'` first (otherwise `docker compose run` reuses the cached image regardless of the build args).
+> Each pair uses its own controller image — the default is the first `MATRIX` entry (`3.14:2.21.1:5.6.0`); select another with `PAIR`, e.g. `make bench PAIR=3.12:2.19.3:5.4.0`. Because the controller image builds to a single shared tag, switch pairs with `make build MATRIX='<pair>'` first (otherwise `docker compose run` reuses the cached image regardless of the build args).
 
 The reported time subtracts a zero-iteration overhead run (ansible startup + per-run setup) from the measured run, so it isolates the plugin's own per-invocation cost; the timed run is repeated and the median is reported. Each run also asserts the fast-path marker (`__produced_by_fast_plugin`) is present in fast mode and absent in stock mode, so the harness fails loudly rather than silently comparing the wrong code paths. Run `python bench/benchmark.py -h` for all flags (`-n/--iterations`, `-r/--repeat`, `-w/--warmup`, `-p/--plugins`).
 
@@ -233,7 +233,7 @@ The reported time subtracts a zero-iteration overhead run (ansible startup + per
 Tests run against multiple Python × ansible-core pairs. The matrix is defined at the top of `Makefile`:
 
 ```makefile
-MATRIX := 3.14:2.20.5:5.6.0  3.12:2.19.3:5.4.0
+MATRIX := 3.14:2.21.1:5.6.0 3.14:2.20.5:5.6.0 3.12:2.19.3:5.4.0
 #          ^Python  ^ansible-core  ^ansible-modules-hashivault
 ```
 

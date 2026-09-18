@@ -17,8 +17,10 @@ DOCUMENTATION = '''
       then prints a summary table at the end of the play run.
     - Classification uses the C(__produced_by_fast_plugin) marker that every fast
       plugin stamps on a successful in-process result; the stock fallback never sets
-      it. Looped tasks are counted per item. Only actions that have a local override
-      are reported, so unrelated tasks (debug, set_fact, ...) do not clutter the table.
+      it. Looped tasks are counted per item, through the per-item ok hook, so items
+      skipped by a per-item condition never reach the tally. Only actions that have a
+      local override are reported, so unrelated tasks (debug, set_fact, ...) do not
+      clutter the table.
     - The point is to make silent fallbacks visible. A task you expected to run fast
       but which hit C(become), a non-local connection or an unsupported argument shows
       up in the C(fallback) column, so you can investigate rather than silently losing
@@ -29,6 +31,10 @@ DOCUMENTATION = '''
   notes:
     - Failed and skipped results are not classified, because the marker is intentionally
       absent on failures regardless of which path ran, so counting them would mislead.
+    - Loop items are read from the per-item ok hook rather than from the aggregated
+      results list, because ansible-core 2.21 no longer includes the skipped flag in
+      the per-item dicts handed to callbacks, which made skipped items look like
+      unmarked fallbacks.
     - Fail-open. Any error while recording a result is swallowed so observability never
       breaks a play.
 '''
@@ -92,26 +98,41 @@ class CallbackModule(CallbackBase):
         else:
             self._fallback[short] += 1
 
-    def _record(self, result):
+    @staticmethod
+    def _task_of(result):
+        # ansible-core 2.19+ exposes `task`; `_task` is the older (now deprecated) name.
+        task = getattr(result, 'task', None)
+        return task if task is not None else getattr(result, '_task', None)
+
+    @staticmethod
+    def _dict_of(result):
+        # ansible-core 2.19+ exposes `result`; `_result` is the older (now deprecated) name.
+        res = getattr(result, 'result', None)
+        return res if res is not None else getattr(result, '_result', None)
+
+    def _record(self, result, item=False):
         try:
-            short = self._short_name(getattr(result._task, 'action', None))
+            short = self._short_name(getattr(self._task_of(result), 'action', None))
             if short not in self._overridden:
                 return
-            res = result._result or {}
-            items = res.get('results')
-            # Looped task: classify each item (the aggregated on_ok carries them);
-            # skipped items did not run the plugin, so they are excluded.
-            if isinstance(items, list) and items:
-                for item in items:
-                    if isinstance(item, dict) and not item.get('skipped'):
-                        self._tally(short, item)
-            else:
-                self._tally(short, res)
+            res = self._dict_of(result) or {}
+            if not item and isinstance(res.get('results'), list):
+                # Aggregated result of a looped task. Its items were already
+                # counted one by one from v2_runner_item_on_ok, which ansible
+                # only fires for items that actually ran (never for skipped or
+                # failed ones). Reading the aggregated `results` list instead
+                # would miscount on ansible-core 2.21+, whose per-item dicts no
+                # longer carry the `skipped` flag for callbacks.
+                return
+            self._tally(short, res)
         except Exception:  # fail-open: observability must never break a run
             pass
 
     def v2_runner_on_ok(self, result):
         self._record(result)
+
+    def v2_runner_item_on_ok(self, result):
+        self._record(result, item=True)
 
     def v2_playbook_on_stats(self, stats):
         actions = sorted(set(self._fast) | set(self._fallback))

@@ -1,3 +1,4 @@
+v0.4.5 - Count loop items from the per-item ok hook; ansible-core 2.21 hides `skipped`, so skips counted as fallbacks
 v0.4.4 - Stream the fast fetch copy with shutil.copyfile; buffering the whole file OOM-killed the controller
 v0.4.3 - Use create/patch/replace for state=present instead of kubectl apply
 v0.4.2 - Report a missing secret the way stock does for hashivault_read

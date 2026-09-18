@@ -150,8 +150,9 @@ def test_environment_fast_path_under_strict():
 def test_fast_path_summary():
     """The aflp_fast_path_summary callback must print a per-action tally.
 
-    The playbook runs several fast tasks plus one lineinfile forced down the
-    fallback (mode arg); the summary must show the fallback in the lineinfile row.
+    The playbook runs several fast tasks, a looped template with per-item skips,
+    plus one lineinfile forced down the fallback (mode arg); the summary must show
+    the fallback in the lineinfile row and count only the rendered template items.
     """
     import re
 
@@ -167,9 +168,14 @@ def test_fast_path_summary():
 
     copy_fast, copy_fb = _counts('copy')
     line_fast, line_fb = _counts('lineinfile')
+    tmpl_fast, tmpl_fb = _counts('template')
     assert copy_fast >= 1 and copy_fb == 0, out
     # one lineinfile ran fast (plain) and one fell back (mode arg)
     assert line_fast >= 1 and line_fb >= 1, out
+    # the looped template rendered exactly 2 of its 4 items; the 2 skipped ones
+    # (and the all-skipped loop) must not be counted, least of all as fallbacks
+    # (ansible-core 2.21 dropped `skipped` from per-item callback dicts)
+    assert (tmpl_fast, tmpl_fb) == (2, 0), out
 
 
 @pytest.mark.integration

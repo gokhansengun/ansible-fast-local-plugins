@@ -66,24 +66,59 @@ class TestFastPathSummary:
         assert 'debug' not in cb._fast and 'debug' not in cb._fallback
         assert 'set_fact' not in cb._fast and 'set_fact' not in cb._fallback
 
-    def test_loop_results_counted_per_item(self, cb):
-        looped = _result('stat', {'results': [
-            {FAST_PLUGIN_MARKER: True},
-            {FAST_PLUGIN_MARKER: True},
-            {},  # one fell back
-        ]})
-        cb.v2_runner_on_ok(looped)
+    def test_loop_items_counted_from_item_hook(self, cb):
+        # ansible fires v2_runner_item_on_ok once per item that actually ran,
+        # never for skipped or failed items, so counting there needs no
+        # `skipped` inspection at all.
+        cb.v2_runner_item_on_ok(_result('stat', {FAST_PLUGIN_MARKER: True, 'item': 'a'}))
+        cb.v2_runner_item_on_ok(_result('stat', {FAST_PLUGIN_MARKER: True, 'item': 'b'}))
+        cb.v2_runner_item_on_ok(_result('stat', {'item': 'c'}))  # one fell back
         assert cb._fast['stat'] == 2
         assert cb._fallback['stat'] == 1
 
-    def test_loop_skipped_items_excluded(self, cb):
-        looped = _result('stat', {'results': [
+    def test_loop_aggregate_not_double_counted(self, cb):
+        # The aggregated on_ok of a looped task (pre-2.21 shape, items carry
+        # `skipped`) must contribute nothing: its items were already counted.
+        cb.v2_runner_item_on_ok(_result('stat', {FAST_PLUGIN_MARKER: True}))
+        cb.v2_runner_on_ok(_result('stat', {'results': [
             {FAST_PLUGIN_MARKER: True},
             {'skipped': True},
-        ]})
-        cb.v2_runner_on_ok(looped)
+        ]}))
         assert cb._fast['stat'] == 1
         assert cb._fallback['stat'] == 0
+
+    def test_loop_aggregate_2_21_shape_skipped_items_not_fallbacks(self, cb):
+        # ansible-core 2.21 hands callbacks per-item dicts WITHOUT the `skipped`
+        # flag (only skip_reason/false_condition survive). Parsing the aggregate
+        # used to count these as unmarked fallbacks; they must be ignored.
+        cb.v2_runner_item_on_ok(_result('template', {FAST_PLUGIN_MARKER: True, 'item': 'a'}))
+        cb.v2_runner_on_ok(_result('template', {'changed': True, 'results': [
+            {FAST_PLUGIN_MARKER: True, 'changed': True, 'item': 'a'},
+            {'changed': False, 'skip_reason': 'Conditional result was False',
+             'false_condition': 'item in changed', 'item': 'b'},
+            {'changed': False, 'skip_reason': 'Conditional result was False',
+             'false_condition': 'item in changed', 'item': 'c'},
+        ]}))
+        assert cb._fast['template'] == 1
+        assert cb._fallback['template'] == 0
+
+    def test_loop_aggregate_with_empty_results_ignored(self, cb):
+        cb.v2_runner_on_ok(_result('copy', {'results': []}))
+        assert cb._fast['copy'] == 0
+        assert cb._fallback['copy'] == 0
+
+    def test_item_hook_ignores_non_overridden_actions(self, cb):
+        cb.v2_runner_item_on_ok(_result('debug', {'item': 1}))
+        assert 'debug' not in cb._fast and 'debug' not in cb._fallback
+
+    def test_reads_public_task_and_result_attrs(self, cb):
+        # ansible-core 2.19+ names: `task` / `result` (the underscored ones are
+        # deprecated). Both spellings must work.
+        modern = SimpleNamespace(task=SimpleNamespace(action='copy'),
+                                 result={FAST_PLUGIN_MARKER: True})
+        cb.v2_runner_on_ok(modern)
+        cb.v2_runner_item_on_ok(modern)
+        assert cb._fast['copy'] == 2
 
     def test_record_is_fail_open(self, cb):
         # A malformed result must not raise.
