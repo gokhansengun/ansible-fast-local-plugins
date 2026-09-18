@@ -79,9 +79,9 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
       args:
-        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
-        ANSIBLE_CORE_VERSION: ${ANSIBLE_CORE_VERSION:-2.19.3}
-        HASHIVAULT_MODULE_VERSION: ${HASHIVAULT_MODULE_VERSION:-5.4.0}
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.14}
+        ANSIBLE_CORE_VERSION: ${ANSIBLE_CORE_VERSION:-2.21.1}
+        HASHIVAULT_MODULE_VERSION: ${HASHIVAULT_MODULE_VERSION:-5.6.0}
     depends_on:
       vault-seed:
         condition: service_completed_successfully

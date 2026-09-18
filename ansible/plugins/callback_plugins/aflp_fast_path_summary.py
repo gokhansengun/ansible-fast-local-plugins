@@ -98,24 +98,12 @@ class CallbackModule(CallbackBase):
         else:
             self._fallback[short] += 1
 
-    @staticmethod
-    def _task_of(result):
-        # ansible-core 2.19+ exposes `task`; `_task` is the older (now deprecated) name.
-        task = getattr(result, 'task', None)
-        return task if task is not None else getattr(result, '_task', None)
-
-    @staticmethod
-    def _dict_of(result):
-        # ansible-core 2.19+ exposes `result`; `_result` is the older (now deprecated) name.
-        res = getattr(result, 'result', None)
-        return res if res is not None else getattr(result, '_result', None)
-
     def _record(self, result, item=False):
         try:
-            short = self._short_name(getattr(self._task_of(result), 'action', None))
+            short = self._short_name(getattr(result.task, 'action', None))
             if short not in self._overridden:
                 return
-            res = self._dict_of(result) or {}
+            res = result.result or {}
             if not item and isinstance(res.get('results'), list):
                 # Aggregated result of a looped task. Its items were already
                 # counted one by one from v2_runner_item_on_ok, which ansible

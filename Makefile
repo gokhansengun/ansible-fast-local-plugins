@@ -1,5 +1,5 @@
 # Format: PYTHON_VERSION:ANSIBLE_CORE_VERSION:HASHIVAULT_MODULE_VERSION
-MATRIX := 3.14:2.21.1:5.6.0 3.14:2.20.5:5.6.0 3.12:2.19.3:5.4.0
+MATRIX := 3.14:2.21.1:5.6.0 3.14:2.20.5:5.6.0
 
 COMPOSE := docker compose -f docker/docker-compose.yml
 
@@ -36,9 +36,9 @@ help:
 	@printf "\n"
 	@printf "Examples:\n"
 	@printf "  make test                            # all pairs\n"
-	@printf "  make test MATRIX='3.12:2.19.3:5.4.0'  # one specific pair\n"
+	@printf "  make test MATRIX='3.14:2.20.5:5.6.0'  # one specific pair\n"
 	@printf "  make test-unit                       # fast, no Docker services\n"
-	@printf "  make shell PAIR=3.12:2.19.3:5.4.0   # drop into a specific (non-default) image\n"
+	@printf "  make shell PAIR=3.14:2.20.5:5.6.0   # drop into a specific (non-default) image\n"
 	@printf "  make bench                           # default benchmark (PAIR image)\n"
 	@printf "  make bench BENCH_ARGS='-n 500 -p copy,stat'  # custom size/plugins\n"
 	@printf "  make demo                            # see the summary + AFLP_DISABLE contrast\n"

@@ -28,7 +28,7 @@ def cb():
 
 
 def _result(action, result_dict):
-    return SimpleNamespace(_task=SimpleNamespace(action=action), _result=result_dict)
+    return SimpleNamespace(task=SimpleNamespace(action=action), result=result_dict)
 
 
 def _fast_result(action):
@@ -111,18 +111,10 @@ class TestFastPathSummary:
         cb.v2_runner_item_on_ok(_result('debug', {'item': 1}))
         assert 'debug' not in cb._fast and 'debug' not in cb._fallback
 
-    def test_reads_public_task_and_result_attrs(self, cb):
-        # ansible-core 2.19+ names: `task` / `result` (the underscored ones are
-        # deprecated). Both spellings must work.
-        modern = SimpleNamespace(task=SimpleNamespace(action='copy'),
-                                 result={FAST_PLUGIN_MARKER: True})
-        cb.v2_runner_on_ok(modern)
-        cb.v2_runner_item_on_ok(modern)
-        assert cb._fast['copy'] == 2
-
     def test_record_is_fail_open(self, cb):
         # A malformed result must not raise.
-        cb.v2_runner_on_ok(SimpleNamespace(_task=None, _result=None))
+        cb.v2_runner_on_ok(SimpleNamespace(task=None, result=None))
+        cb.v2_runner_on_ok(SimpleNamespace())  # neither attribute at all
         cb.v2_runner_on_ok(_result('copy', None))
         assert cb._fast['copy'] == 0
 

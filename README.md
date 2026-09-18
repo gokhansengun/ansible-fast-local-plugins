@@ -184,26 +184,7 @@ make bench                                   # default: 100 iterations, all plug
 make bench BENCH_ARGS='-n 500 -p copy,stat'  # custom size / subset of plugins
 ```
 
-Example output (100 iterations, median of 3; absolute times vary by host, the speedup is the stable figure). Both matrix pairs land around **11–12× faster** overall, with the file-writing plugins (`copy`/`template`) up around **15×**:
-
-**Python 3.12 / ansible-core 2.19.3**
-
-```
-plugin          stock       fast    speedup
---------------------------------------------
-stat         14.107s    1.305s      10.8x
-copy         27.054s    1.910s      14.2x
-template     27.138s    1.843s      14.7x
-file         14.781s    1.323s      11.2x
-command      14.372s    1.280s      11.2x
-tempfile     13.985s    1.253s      11.2x
-lineinfile   14.280s    1.361s      10.5x
-slurp        13.898s    1.266s      11.0x
-fetch        13.804s    1.739s       7.9x
-get_url      19.019s    2.332s       8.2x
---------------------------------------------
-TOTAL       172.439s   15.613s      11.0x
-```
+Example output (100 iterations, median of 3; absolute times vary by host, the speedup is the stable figure). The matrix lands around **11–12× faster** overall, with the file-writing plugins (`copy`/`template`) up around **15×**:
 
 **Python 3.14 / ansible-core 2.20.5**
 
@@ -224,7 +205,7 @@ get_url      19.729s    2.265s       8.7x
 TOTAL       183.987s   15.762s      11.7x
 ```
 
-> Each pair uses its own controller image — the default is the first `MATRIX` entry (`3.14:2.21.1:5.6.0`); select another with `PAIR`, e.g. `make bench PAIR=3.12:2.19.3:5.4.0`. Because the controller image builds to a single shared tag, switch pairs with `make build MATRIX='<pair>'` first (otherwise `docker compose run` reuses the cached image regardless of the build args).
+> Each pair uses its own controller image — the default is the first `MATRIX` entry (`3.14:2.21.1:5.6.0`); select another with `PAIR`, e.g. `make bench PAIR=3.14:2.20.5:5.6.0`. Because the controller image builds to a single shared tag, switch pairs with `make build MATRIX='<pair>'` first (otherwise `docker compose run` reuses the cached image regardless of the build args).
 
 The reported time subtracts a zero-iteration overhead run (ansible startup + per-run setup) from the measured run, so it isolates the plugin's own per-invocation cost; the timed run is repeated and the median is reported. Each run also asserts the fast-path marker (`__produced_by_fast_plugin`) is present in fast mode and absent in stock mode, so the harness fails loudly rather than silently comparing the wrong code paths. Run `python bench/benchmark.py -h` for all flags (`-n/--iterations`, `-r/--repeat`, `-w/--warmup`, `-p/--plugins`).
 
@@ -233,7 +214,7 @@ The reported time subtracts a zero-iteration overhead run (ansible startup + per
 Tests run against multiple Python × ansible-core pairs. The matrix is defined at the top of `Makefile`:
 
 ```makefile
-MATRIX := 3.14:2.21.1:5.6.0 3.14:2.20.5:5.6.0 3.12:2.19.3:5.4.0
+MATRIX := 3.14:2.21.1:5.6.0 3.14:2.20.5:5.6.0
 #          ^Python  ^ansible-core  ^ansible-modules-hashivault
 ```
 
@@ -242,14 +223,14 @@ The third column is the `ansible-modules-hashivault` version, which is version-l
 Run a single pair:
 
 ```bash
-make test MATRIX='3.12:2.19.3:5.4.0'
+make test MATRIX='3.14:2.20.5:5.6.0'
 ```
 
 Drop into a shell inside a specific controller image (the default pair is the
 first `MATRIX` entry; pass `PAIR` to pick another):
 
 ```bash
-make shell PAIR=3.12:2.19.3:5.4.0
+make shell PAIR=3.14:2.20.5:5.6.0
 ```
 
 ## Project structure
@@ -323,7 +304,7 @@ pyproject.toml
 Install dependencies locally and run pytest directly:
 
 ```bash
-pip install "ansible-core==2.19.3" hvac "ansible-modules-hashivault==5.4.0" \
+pip install "ansible-core==2.21.1" hvac "ansible-modules-hashivault==5.6.0" \
     pytest pytest-mock pytest-cov
 pytest tests/unit/ -v
 ```
