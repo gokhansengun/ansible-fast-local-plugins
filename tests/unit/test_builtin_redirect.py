@@ -84,3 +84,26 @@ def test_overridden_names_unions_sources_and_skips_missing_dirs():
     )
     names = cb._overridden_names('/nonexistent/path', action_dir)
     assert 'stat' in names
+
+
+# --- _install_patch -------------------------------------------------------
+
+def test_install_patch_reports_module_only_overrides_via_has_plugin():
+    # tempfile/stat have no ansible-core action plugin, only a module. TaskExecutor
+    # only calls action_loader.get(<fqcn>) when has_plugin(<fqcn>) is True, so the
+    # patch must report overridden builtin names as present or they bypass the rewrite.
+    from ansible.plugins.loader import action_loader
+
+    original_get = action_loader.get
+    original_has = action_loader.has_plugin
+    try:
+        assert not original_has('ansible.builtin.tempfile')
+        cb._install_patch()
+        assert action_loader.has_plugin('ansible.builtin.tempfile')
+        assert action_loader.has_plugin('ansible.builtin.stat')
+        # Non-overridden names still go through the stock lookup.
+        assert action_loader.has_plugin('ansible.builtin.debug') == original_has('ansible.builtin.debug')
+        assert not action_loader.has_plugin('ansible.builtin.no_such_plugin')
+    finally:
+        action_loader.get = original_get
+        action_loader.has_plugin = original_has

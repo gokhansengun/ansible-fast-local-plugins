@@ -1,3 +1,4 @@
+v0.5.1 - Patch has_plugin in builtin redirect so module-only ansible.builtin.* FQCNs (tempfile, stat, …) go fast
 v0.5.0 - Drop the py3.12 / ansible-core 2.19.3 / hashivault 5.4.0 pair; remove pre-2.19 `_task`/`_result` fallback
 v0.4.5 - Count loop items from the per-item ok hook; ansible-core 2.21 hides `skipped`, so skips counted as fallbacks
 v0.4.4 - Stream the fast fetch copy with shutil.copyfile; buffering the whole file OOM-killed the controller

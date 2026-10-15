@@ -69,6 +69,42 @@
           - not r_fqcn_again.changed
           - r_fqcn_again['__produced_by_fast_plugin'] | default(false)
 
+    # --- module-only builtins: no ansible-core action plugin exists for these,
+    # so the redirect must also make has_plugin() report them, or TaskExecutor
+    # runs the stock module via the 'normal' action and never calls get(). ---
+    - name: Create a temp dir via FQCN ansible.builtin.tempfile
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: aflp-fqcn-
+      register: r_tempfile
+
+    - name: Stat via FQCN ansible.builtin.stat
+      ansible.builtin.stat:
+        path: "{{ r_tempfile.path }}"
+      register: r_stat
+
+    - name: Module-only FQCN tasks ran through the fast plugins
+      assert:
+        that:
+          - r_tempfile['__produced_by_fast_plugin'] | default(false)
+          - r_stat['__produced_by_fast_plugin'] | default(false)
+          - r_stat.stat.isdir
+        fail_msg: |
+          module-only ansible.builtin.* tasks did not route to the fast plugins
+          tempfile keys: {{ r_tempfile.keys() | list | sort }}
+          stat keys: {{ r_stat.keys() | list | sort }}
+
+    - name: Remove the FQCN temp dir
+      ansible.builtin.file:
+        path: "{{ r_tempfile.path }}"
+        state: absent
+      register: r_file
+
+    - name: ansible.builtin.file also ran through the fast plugin
+      assert:
+        that:
+          - r_file['__produced_by_fast_plugin'] | default(false)
+
     # --- safety: a builtin WITHOUT a local override is left untouched ---
     - name: A non-overridden builtin still works normally
       ansible.builtin.set_fact:

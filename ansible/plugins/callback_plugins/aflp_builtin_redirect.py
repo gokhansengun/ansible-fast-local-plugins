@@ -29,7 +29,8 @@ DOCUMENTATION = '''
     - The patch is intentionally fail-open. Any error while installing it, or while
       rewriting a name at call time, falls back to stock ansible-core behaviour rather
       than breaking the run. Re-verify against ansible-core internals when bumping the
-      version matrix (the patched symbol is ansible.plugins.loader.action_loader.get).
+      version matrix (the patched symbols are ansible.plugins.loader.action_loader.get
+      and action_loader.has_plugin).
 '''
 
 display = Display()
@@ -108,6 +109,27 @@ def _install_patch():
     patched_get._aflp_patched = True
     patched_get._aflp_original = original_get
     action_loader.get = patched_get
+
+    # ansible-core's TaskExecutor only resolves a task's handler through
+    # action_loader.get(<fqcn>) when has_plugin(<fqcn>) is True; otherwise it
+    # falls back to the 'normal' action and runs the stock MODULE directly.
+    # Several overrides (tempfile, stat, file, slurp, lineinfile, get_url) are
+    # module-only in ansible-core, so without this their ansible.builtin.* names
+    # bypass the rewrite entirely. Report overridden names as present so
+    # resolution keeps the fqcn handler, which patched_get then rewrites.
+    original_has = action_loader.has_plugin
+
+    def patched_has(name, *args, **kwargs):
+        try:
+            if _redirect_name(name, overridden) != name:
+                return True
+        except Exception:  # fail-open
+            pass
+        return original_has(name, *args, **kwargs)
+
+    patched_has._aflp_original = original_has
+    action_loader.has_plugin = patched_has
+
     display.vvv(
         'aflp_builtin_redirect: routing ansible.builtin.{%s} to the fast local plugins'
         % ','.join(sorted(overridden))
